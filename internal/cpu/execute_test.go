@@ -548,3 +548,62 @@ func TestExecuteSLT(t *testing.T) {
 		t.Fatalf("SLT: expected 5 < 2 to write 0, got %d", cpu.ReadRegister(10))
 	}
 }
+
+func TestExecuteCOP0_MTC0_MFC0(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.WriteRegister(8, 0x12345678)
+
+	// MTC0 $t0, Status ($8 is general reg, $12 is CP0 Status)
+	// Rs = 4 (MTC0), Rt = 8, Rd = 12 (CP0 Status)
+	instMtc0 := Instruction{
+		Opcode: OP_COP0,
+		Rs:     4,
+		Rt:     8,
+		Rd:     12,
+	}
+
+	cpu.Execute(instMtc0)
+
+	if cpu.CP0[12] != 0x12345678 {
+		t.Fatalf("expected CP0 Status to be 0x12345678, got 0x%08X", cpu.CP0[12])
+	}
+
+	// MFC0 $t1, Status
+	// Rs = 0 (MFC0), Rt = 9, Rd = 12
+	instMfc0 := Instruction{
+		Opcode: OP_COP0,
+		Rs:     0,
+		Rt:     9,
+		Rd:     12,
+	}
+
+	cpu.Execute(instMfc0)
+
+	if cpu.ReadRegister(9) != 0x12345678 {
+		t.Fatalf("expected register 9 to be 0x12345678, got 0x%08X", cpu.ReadRegister(9))
+	}
+}
+
+func TestExecuteERET(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.CP0[14] = 0x80001000 // EPC
+	cpu.CP0[12] = 0x00000007 // Status (EXL is bit 1)
+
+	// ERET instruction: Opcode=16, Rs=16, Funct=24
+	inst := Instruction{
+		Opcode: OP_COP0,
+		Rs:     16,
+		Funct:  24,
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x80001000 {
+		t.Fatalf("expected PC to be 0x80001000, got 0x%08X", cpu.PC)
+	}
+
+	// EXL bit (bit 1, mask 0x2) in CP0 Status should be cleared
+	if (cpu.CP0[12] & 0x2) != 0 {
+		t.Fatalf("expected Status EXL bit to be cleared, got 0x%08X", cpu.CP0[12])
+	}
+}

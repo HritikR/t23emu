@@ -29,6 +29,9 @@ type CPU struct {
 
 	// Reset PC address
 	ResetPC uint32
+
+	// Coprocessor 0 registers
+	CP0 [32]uint32
 }
 
 // New creates a new CPU instance
@@ -49,6 +52,15 @@ func (c *CPU) Reset() {
 	for i := range c.Regs {
 		c.Regs[i] = 0
 	}
+
+	// Clear Coprocessor 0 registers
+	for i := range c.CP0 {
+		c.CP0[i] = 0
+	}
+
+	// Initialize Processor Identification (PRId) register at index 15
+	// A standard MIPS32 processor value.
+	c.CP0[15] = 0x00018000
 
 	c.PC = c.ResetPC
 

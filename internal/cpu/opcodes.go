@@ -17,9 +17,23 @@ const (
 	OP_ORI  uint8 = 13
 	OP_LUI  uint8 = 15
 
+	// Coprocessor 0
+	OP_COP0 uint8 = 16
+
 	// Memory
 	OP_LW uint8 = 35
 	OP_SW uint8 = 43
+)
+
+// Coprocessor 0 register indices
+const (
+	CP0_BADVADDR uint8 = 8
+	CP0_COUNT    uint8 = 9
+	CP0_COMPARE  uint8 = 11
+	CP0_STATUS   uint8 = 12
+	CP0_CAUSE    uint8 = 13
+	CP0_EPC      uint8 = 14
+	CP0_PRID     uint8 = 15
 )
 
 const (

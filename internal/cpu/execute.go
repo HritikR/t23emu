@@ -42,6 +42,9 @@ func (c *CPU) Execute(inst Instruction) {
 	case OP_SW:
 		c.executeSW(inst)
 
+	case OP_COP0:
+		c.executeCOP0(inst)
+
 	default:
 
 		panic(
@@ -296,4 +299,38 @@ func (c *CPU) executeSRL(inst Instruction) {
 func (c *CPU) executeSRA(inst Instruction) {
 	rt := int32(c.ReadRegister(inst.Rt))
 	c.WriteRegister(inst.Rd, uint32(rt >> inst.Shamt))
+}
+
+func (c *CPU) executeCOP0(inst Instruction) {
+	// ERET instruction has funct code 24 and Rs=16
+	if inst.Funct == 24 && inst.Rs == 16 {
+		c.executeERET(inst)
+		return
+	}
+
+	switch inst.Rs {
+	case 0: // MFC0 rt, rd
+		c.executeMFC0(inst)
+	case 4: // MTC0 rt, rd
+		c.executeMTC0(inst)
+	default:
+		panic(fmt.Sprintf("unsupported COP0 sub-op (Rs): %d", inst.Rs))
+	}
+}
+
+func (c *CPU) executeMFC0(inst Instruction) {
+	value := c.CP0[inst.Rd]
+	c.WriteRegister(inst.Rt, value)
+}
+
+func (c *CPU) executeMTC0(inst Instruction) {
+	value := c.ReadRegister(inst.Rt)
+	c.CP0[inst.Rd] = value
+}
+
+func (c *CPU) executeERET(inst Instruction) {
+	// Set PC to CP0 Exception Program Counter (EPC)
+	c.PC = c.CP0[CP0_EPC]
+	// Clear the EXL (Exception Level) bit (bit 1) in Status register
+	c.CP0[CP0_STATUS] &= ^uint32(0x2)
 }
