@@ -15,6 +15,12 @@ func (c *CPU) Execute(inst Instruction) {
 
 		c.executeADDI(inst)
 
+	case OP_LW:
+		c.executeLW(inst)
+
+	case OP_SW:
+		c.executeSW(inst)
+
 	default:
 
 		panic(
@@ -101,5 +107,59 @@ func (c *CPU) executeADDI(inst Instruction) {
 	c.WriteRegister(
 		inst.Rt,
 		result,
+	)
+}
+
+// LW
+//
+// rt = memory[rs + immediate]
+func (c *CPU) executeLW(inst Instruction) {
+
+	base := c.ReadRegister(
+		inst.Rs,
+	)
+
+	offset := int32(
+		int16(inst.Immediate),
+	)
+
+	address := uint32(
+		int32(base) + offset,
+	)
+
+	value := c.Bus.Read32(
+		address,
+	)
+
+	c.WriteRegister(
+		inst.Rt,
+		value,
+	)
+}
+
+// SW
+//
+// memory[rs + immediate] = rt
+func (c *CPU) executeSW(inst Instruction) {
+
+	base := c.ReadRegister(
+		inst.Rs,
+	)
+
+	offset := int32(
+		int16(inst.Immediate),
+	)
+
+	address := uint32(
+		int32(base) + offset,
+	)
+
+	value := c.ReadRegister(
+		inst.Rt,
+	)
+
+	c.Bus.Write32(
+		address,
+		value,
 	)
 }
