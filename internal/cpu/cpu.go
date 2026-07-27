@@ -26,6 +26,9 @@ type CPU struct {
 
 	// Cycle counter
 	Cycles uint64
+
+	// Reset PC address
+	ResetPC uint32
 }
 
 // New creates a new CPU instance
@@ -47,9 +50,7 @@ func (c *CPU) Reset() {
 		c.Regs[i] = 0
 	}
 
-	// MIPS reset vector will be adjusted later
-	// when we implement the T23 boot process.
-	c.PC = 0x00000000
+	c.PC = c.ResetPC
 
 	c.Instruction = 0
 

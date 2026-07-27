@@ -48,6 +48,11 @@ func New(ramSize uint32, romData []byte) *Machine {
 		b,
 	)
 
+	if rom != nil {
+		c.ResetPC = ROMStart
+		c.Reset()
+	}
+
 	return &Machine{
 		CPU: c,
 		RAM: ram,

@@ -282,3 +282,73 @@ func TestMachineWithROM(t *testing.T) {
 		)
 	}
 }
+
+func TestMachineBootFromROM(t *testing.T) {
+
+	// Build a small program to run from ROM:
+	// 1. addi $t0, $zero, 42  => Write 42 to $t0 (register 8)
+	// 2. sw $t0, 100($zero)   => Write value of $t0 to RAM address 100
+	program := []uint32{
+		cpu.EncodeI(
+			cpu.OP_ADDI,
+			0,
+			8,
+			42,
+		),
+		cpu.EncodeI(
+			cpu.OP_SW,
+			0,
+			8,
+			100,
+		),
+	}
+
+	// Convert program to little-endian bytes for ROM
+	romData := make([]byte, len(program)*4)
+	for i, inst := range program {
+		romData[i*4] = byte(inst)
+		romData[i*4+1] = byte(inst >> 8)
+		romData[i*4+2] = byte(inst >> 16)
+		romData[i*4+3] = byte(inst >> 24)
+	}
+
+	m := New(1024, romData)
+
+	// Verify CPU PC is initialized to ROMStart
+	if m.CPU.PC != ROMStart {
+		t.Fatalf(
+			"expected PC to be ROMStart (0x%08X), got 0x%08X",
+			ROMStart,
+			m.CPU.PC,
+		)
+	}
+
+	// Run the CPU for 2 cycles
+	cycles := m.Run(2)
+
+	if cycles != 2 {
+		t.Fatalf(
+			"expected to run 2 cycles, got %d",
+			cycles,
+		)
+	}
+
+	// Verify the result of executing ROM instructions:
+	// Register 8 should be 42
+	regVal := m.CPU.ReadRegister(8)
+	if regVal != 42 {
+		t.Fatalf(
+			"expected register 8 to be 42, got %d",
+			regVal,
+		)
+	}
+
+	// RAM address 100 should contain 42
+	ramVal := m.RAM.Read32(100)
+	if ramVal != 42 {
+		t.Fatalf(
+			"expected RAM address 100 to contain 42, got %d",
+			ramVal,
+		)
+	}
+}
