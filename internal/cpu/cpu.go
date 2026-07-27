@@ -71,11 +71,11 @@ func (c *CPU) Step() {
 		return
 	}
 
-	c.Fetch()
+	raw := c.Fetch()
 
-	// TODO:
-	// Decode instruction
-	// Execute instruction
+	inst := Decode(raw)
+
+	c.Execute(inst)
 }
 
 // Run executes the CPU loop.
