@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"fmt"
 	"github.com/HritikR/t23emu/internal/bus"
 	"github.com/HritikR/t23emu/internal/cpu"
 	"github.com/HritikR/t23emu/internal/device"
@@ -8,23 +9,88 @@ import (
 )
 
 const (
-	ROMStart  uint32 = 0x1fc00000 // Physical ROM start
-	CPMStart  uint32 = 0x10000000
-	CPMEnd    uint32 = 0x1000FFFF
+	ROMStart uint32 = 0x1fc00000 // Physical ROM start
+
+	// CPMStart covers only the clock and power block itself. A wider
+	// window would swallow the interrupt controller and timer unit that sit
+	// immediately above it, and misattribute their accesses to CPM.
+	CPMStart uint32 = 0x10000000
+	CPMEnd   uint32 = 0x10000FFF
+
+	// INTCStart is the interrupt controller.
+	INTCStart uint32 = 0x10001000
+	INTCEnd   uint32 = 0x10001FFF
+
+	// TCUStart covers the watchdog, timer/counter unit and OS timer, which
+	// share one 4 KB window.
+	TCUStart uint32 = 0x10002000
+	TCUEnd   uint32 = 0x10002FFF
+
 	GPIOStart uint32 = 0x10010000
 	GPIOEnd   uint32 = 0x1001FFFF
-	UARTStart uint32 = 0x10030000 // Ingenic UART standard physical address
-	UARTEnd   uint32 = 0x1003FFFF
+
+	// UARTStart is the physical base of UART0. The three ports are spaced
+	// 0x1000 apart and are mapped individually, because firmware picks a
+	// console port by base address and the SPL in particular uses UART1.
+	UARTStart  uint32 = 0x10030000
+	UARTStride uint32 = 0x1000
+	UARTCount  int    = 3
+	UARTEnd    uint32 = 0x1003FFFF
+
+	// DDRCStart covers the DDR controller and PHY, which the SPL programs
+	// before it can relocate anything into external memory.
+	DDRCStart uint32 = 0x13010000
+	DDRCEnd   uint32 = 0x1301FFFF
+
+	// DDRPStart is the DDR PHY block.
+	DDRPStart uint32 = 0x134F0000
+	DDRPEnd   uint32 = 0x134FFFFF
+
+	// SFCStart is the serial flash controller.
+	SFCStart uint32 = 0x13440000
+	SFCEnd   uint32 = 0x1344FFFF
+
+	// GMACStart is the Ethernet MAC and MDIO controller.
+	GMACStart uint32 = 0x134B0000
+	GMACEnd   uint32 = 0x134BFFFF
+
+	// EFUSEStart is the one-time-programmable fuse controller, which the
+	// SPL reads for the chip identifier and DDR calibration values.
+	EFUSEStart uint32 = 0x13540000
+	EFUSEEnd   uint32 = 0x1354FFFF
+
+	// PeriphStart and PeriphEnd bracket the whole on-chip peripheral
+	// window. A catch-all register file is mapped across it, behind every
+	// specific device, so that touching a peripheral the emulator does not
+	// model yet reads back as a benign register rather than faulting and
+	// killing the boot. Everything it absorbs is recorded and reported, so
+	// the gap stays visible instead of being silently papered over.
+	PeriphStart uint32 = 0x10000000
+	PeriphEnd   uint32 = 0x13FFFFFF
+
+	// SPLLoadAddress is the physical address at which the boot ROM places
+	// byte zero of an SPL image.
+	//
+	// The image itself pins this down. A J instruction only replaces the
+	// low 28 bits of the program counter, so every call and jump in the
+	// image encodes its link address directly. Solving for the offset that
+	// makes the image's JAL targets land on function prologues gives a
+	// single sharp answer of 0x1000: at that offset 32 of 79 in-range
+	// calls hit a prologue, against 13 for the next best candidate. It is
+	// confirmed by the entry code's `j 0x1b40`, which then resolves to the
+	// SPL's main routine rather than to the middle of a byte-swap loop.
+	SPLLoadAddress uint32 = 0x00001000
+
+	// SPLHeaderSize is the size of the Ingenic boot header that precedes
+	// the first instruction.
+	SPLHeaderSize uint32 = 0x800
+
+	// BootROMReturn is the return address the boot ROM would leave in $ra.
+	// It is deliberately not backed by any device: reaching it means the
+	// firmware returned to its caller, which the machine reports rather
+	// than letting the core execute whatever happens to be there.
+	BootROMReturn uint32 = 0xbfc0f000
 )
-
-type stubDevice struct{}
-
-func (s *stubDevice) Read8(addr uint32) byte             { return 0 }
-func (s *stubDevice) Write8(addr uint32, value byte)     {}
-func (s *stubDevice) Read32(addr uint32) uint32          { return 0 }
-func (s *stubDevice) Write32(addr uint32, value uint32)  {}
-
-var _ device.Device = (*stubDevice)(nil)
 
 type Machine struct {
 	CPU *cpu.CPU
@@ -33,110 +99,183 @@ type Machine struct {
 
 	ROM *device.ROM
 
+	// UART is UART0, retained as the conventional console handle.
 	UART *device.UART
 
+	// UARTs holds every serial port, since firmware may pick any of them
+	// as its console.
+	UARTs []*device.UART
+
+	// CPM is the clock and power management block. The SPL programs the
+	// PLLs through it and polls them for lock.
+	CPM *device.RegisterBlock
+
+	// INTC is the interrupt controller.
+	INTC *device.RegisterBlock
+
+	// TCU is the watchdog, timer/counter and OS timer block.
+	TCU *device.RegisterBlock
+
+	// GPIO is the pin multiplexing and direction block.
+	GPIO *device.RegisterBlock
+
+	// DDRC is the DDR memory controller block.
+	DDRC *device.RegisterBlock
+
+	// DDRP is the DDR PHY block.
+	DDRP *device.RegisterBlock
+
+	// SFC is the serial flash controller.
+	SFC *device.SFC
+
+	// GMAC is the Ethernet MAC and MDIO controller.
+	GMAC *device.RegisterBlock
+
+	// EFUSE is the one-time-programmable fuse controller.
+	EFUSE *device.RegisterBlock
+
+	// Periph is the catch-all covering peripherals with no model yet.
+	// Anything it records is a peripheral the emulator still needs.
+	Periph *device.RegisterBlock
+
 	Bus *bus.Bus
+
+	// BootROMReturn is the address that signals a return to the boot ROM.
+	BootROMReturn uint32
 }
 
 // New creates a new T23 emulator machine.
 func New(ramSize uint32, romData []byte) *Machine {
 
-	ram := memory.NewRAM(
-		ramSize,
-	)
+	// An Ingenic boot image carries a 0x800-byte header whose signature
+	// sits at offset 4. The boot ROM strips it and runs the code that
+	// follows, so the emulator has to load such an image differently from
+	// a raw ROM.
+	isIngenicSPL := len(romData) > int(SPLHeaderSize) &&
+		romData[4] == 0x02 &&
+		romData[5] == 0x55 &&
+		romData[6] == 0xAA &&
+		romData[7] == 0x55 &&
+		romData[8] == 0xAA
+
+	// An SPL executes in place, so RAM has to be large enough to hold it.
+	if isIngenicSPL && uint32(len(romData)) > ramSize {
+		ramSize = uint32(len(romData))
+	}
+
+	ram := memory.NewRAM(ramSize)
 
 	b := bus.New()
 
-	b.Map(
-		0x00000000,
-		ramSize-1,
-		ram,
-	)
+	b.Map(0x00000000, ramSize-1, ram)
 
-	isIngenicSPL := len(romData) > 0x800 && romData[4] == 0x02 && romData[5] == 0x55 && romData[6] == 0xAA && romData[7] == 0x55 && romData[8] == 0xAA
-	isFirmwareDump := len(romData) == 8388608
+	// Peripherals. These are register files rather than zero stubs: a
+	// driver that configures a peripheral and reads back its own settings
+	// gets the value it wrote, which a stub returning zero would break.
+	cpm := device.NewCPM()
+	b.Map(CPMStart, CPMEnd, cpm)
 
-	// Map specific devices first so they take precedence over ROM
-	if !isIngenicSPL || isFirmwareDump {
-		// Map Clock and Power Management (CPM) physical stub
-		b.Map(
-			CPMStart,
-			CPMEnd,
-			&stubDevice{},
-		)
+	intc := device.NewRegisterBlock("INTC", INTCEnd-INTCStart+1)
+	b.Map(INTCStart, INTCEnd, intc)
+
+	// The timer block needs a tick source, but the CPU that provides it
+	// does not exist until the bus is fully populated. The indirection
+	// through cpuCycles closes that loop.
+	var cpuCycles func() uint64
+	tcu := device.NewTCU(func() uint64 {
+		if cpuCycles == nil {
+			return 0
+		}
+		return cpuCycles()
+	})
+	b.Map(TCUStart, TCUEnd, tcu)
+
+	gpio := device.NewRegisterBlock("GPIO", GPIOEnd-GPIOStart+1)
+	b.Map(GPIOStart, GPIOEnd, gpio)
+
+	uarts := make([]*device.UART, UARTCount)
+	for i := range uarts {
+		base := UARTStart + uint32(i)*UARTStride
+		uarts[i] = device.NewNamedUART(fmt.Sprintf("UART%d", i), nil)
+		b.Map(base, base+UARTStride-1, uarts[i])
 	}
+	uart := uarts[0]
 
-	// Map GPIO physical stub
-	b.Map(
-		GPIOStart,
-		GPIOEnd,
-		&stubDevice{},
-	)
+	ddrc := device.NewDDRC()
+	b.Map(DDRCStart, DDRCEnd, ddrc)
 
-	uart := device.NewUART(nil)
-	b.Map(
-		UARTStart,
-		UARTEnd,
-		uart,
-	)
+	ddrp := device.NewDDRP()
+	b.Map(DDRPStart, DDRPEnd, ddrp)
+
+	sfc := device.NewSFC(romData)
+	b.Map(SFCStart, SFCEnd, sfc)
+
+	gmac := device.NewGMAC()
+	b.Map(GMACStart, GMACEnd, gmac)
+
+	efuse := device.NewEFUSE()
+	b.Map(EFUSEStart, EFUSEEnd, efuse)
+
+	// Mapped last so that every specific device above takes precedence.
+	periph := device.NewRegisterBlock("PERIPH", PeriphEnd-PeriphStart+1)
+	b.Map(PeriphStart, PeriphEnd, periph)
 
 	var rom *device.ROM
-	romStart := ROMStart
-	resetPC := uint32(0xbfc00000)
-	var sram *memory.RAM
-	var sramSize uint32
 
-	if isIngenicSPL {
-		romStart = 0x10000000 // Map SPL at physical SRAM base
-		resetPC = 0xb0000800  // Reset PC inside SRAM (kseg1)
-		sramSize = 262144     // 256KB SRAM
-		if uint32(len(romData)) > sramSize {
-			sramSize = uint32(len(romData))
-		}
-	}
+	resetPC := uint32(0xbfc00000)
 
 	if len(romData) > 0 {
 		if isIngenicSPL {
-			sram = memory.NewRAM(sramSize)
+			// Copy the whole image, header included, to the load address
+			// and enter just past the header. Keeping the header mapped
+			// matches the hardware, where the boot ROM has already
+			// written it to memory.
 			for i, val := range romData {
-				sram.Write8(uint32(i), val)
+				ram.Write8(SPLLoadAddress+uint32(i), val)
 			}
-			b.Map(
-				romStart,
-				romStart+sramSize-1,
-				sram,
-			)
+
+			// Execute through kseg0, which maps to physical zero.
+			resetPC = 0x80000000 + SPLLoadAddress + SPLHeaderSize
 		} else {
 			rom = device.NewROM(romData)
-			b.Map(
-				romStart,
-				romStart+uint32(len(romData))-1,
-				rom,
-			)
+			b.Map(ROMStart, ROMStart+uint32(len(romData))-1, rom)
 		}
 	}
 
-	c := cpu.New(
-		b,
-	)
+	c := cpu.New(b)
+
+	cpuCycles = func() uint64 { return c.Cycles }
 
 	if len(romData) > 0 {
 		c.ResetPC = resetPC
 		c.Reset()
+
 		if isIngenicSPL {
-			// Initialize stack pointer to standard top of SRAM (virtual 0xb0010000)
-			c.WriteRegister(29, 0xb0010000)
-			// Initialize return address register ($ra) to BootROM handoff hook address
-			c.WriteRegister(31, 0x90000000)
+			// The boot ROM hands control over with a stack below the
+			// image and a return address pointing back into itself.
+			c.WriteRegister(29, 0x80000000+SPLLoadAddress+uint32(len(romData))+0x4000)
+			c.WriteRegister(31, BootROMReturn)
 		}
 	}
 
 	return &Machine{
-		CPU:  c,
-		RAM:  ram,
-		ROM:  rom,
-		UART: uart,
-		Bus:  b,
+		CPU:           c,
+		RAM:           ram,
+		ROM:           rom,
+		UART:          uart,
+		UARTs:         uarts,
+		CPM:           cpm,
+		INTC:          intc,
+		TCU:           tcu,
+		GPIO:          gpio,
+		DDRC:          ddrc,
+		DDRP:          ddrp,
+		SFC:           sfc,
+		GMAC:          gmac,
+		EFUSE:         efuse,
+		Periph:        periph,
+		Bus:           b,
+		BootROMReturn: BootROMReturn,
 	}
 }
 
@@ -185,6 +324,15 @@ func (m *Machine) Run(maxCycles uint64) uint64 {
 	for m.CPU.Running {
 
 		if m.CPU.Cycles-start >= maxCycles {
+			break
+		}
+
+		// Catch a return to the boot ROM before the fetch, so it is
+		// reported as a handoff rather than as a fault on an unmapped
+		// address.
+		if m.BootROMReturn != 0 && m.CPU.PC == m.BootROMReturn {
+			m.CPU.HaltWith(cpu.HaltBootROMReturn,
+				"firmware returned to boot ROM at 0x%08X", m.BootROMReturn)
 			break
 		}
 
