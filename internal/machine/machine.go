@@ -72,15 +72,22 @@ func (m *Machine) LoadProgram(
 //
 // This prevents tests from accidentally creating
 // infinite loops.
-func (m *Machine) Run(cycles int) {
+func (m *Machine) Run(maxCycles uint64) uint64 {
 
 	m.CPU.Running = true
 
-	for i := 0; i < cycles; i++ {
+	start := m.CPU.Cycles
+
+	for m.CPU.Running {
+
+		if m.CPU.Cycles-start >= maxCycles {
+			break
+		}
 
 		m.CPU.Step()
-
 	}
 
 	m.CPU.Stop()
+
+	return m.CPU.Cycles - start
 }

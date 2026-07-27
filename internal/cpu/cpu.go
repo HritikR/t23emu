@@ -20,6 +20,12 @@ type CPU struct {
 
 	// CPU execution state
 	Running bool
+
+	// CPU halt status
+	HaltReason HaltReason
+
+	// Cycle counter
+	Cycles uint64
 }
 
 // New creates a new CPU instance
@@ -48,6 +54,10 @@ func (c *CPU) Reset() {
 	c.Instruction = 0
 
 	c.Running = false
+
+	c.HaltReason = HaltNone
+
+	c.Cycles = 0
 }
 
 // Fetch reads the next instruction from memory
@@ -76,6 +86,8 @@ func (c *CPU) Step() {
 	inst := Decode(raw)
 
 	c.Execute(inst)
+
+	c.Cycles++
 }
 
 // Run executes the CPU loop.
@@ -92,4 +104,11 @@ func (c *CPU) Run() {
 func (c *CPU) Stop() {
 
 	c.Running = false
+}
+
+func (c *CPU) Halt(reason HaltReason) {
+
+	c.Running = false
+
+	c.HaltReason = reason
 }
