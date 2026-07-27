@@ -93,6 +93,17 @@ const (
 	CP0_ERROREPC uint8 = 30
 )
 
+// CP0 Config register bits and reset values used by the emulated T23 core.
+const (
+	CONFIG_M  uint32 = 1 << 31
+	CONFIG_K0 uint32 = 3
+
+	// Config1 describes a small MIPS32/XBurst-class core with 32 TLB
+	// entries, separate 16 KiB I/D caches, no FPU, and no Config2.
+	CP0_CONFIG1_RESET uint32 = (31 << 25) | (3 << 22) | (4 << 19) | (1 << 16) |
+		(3 << 13) | (4 << 10) | (1 << 7)
+)
+
 // CP0 Status register bits
 const (
 	STATUS_IE  uint32 = 1 << 0  // Interrupt enable

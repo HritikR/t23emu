@@ -118,6 +118,10 @@ func (c *CPU) Reset() {
 	// A standard MIPS32 processor value.
 	c.CP0[CP0_PRID] = 0x00018000
 
+	// Advertise Config1 through Config.M. Linux checks this before reading
+	// the cache/TLB geometry from CP0 Config select 1.
+	c.CP0[CP0_CONFIG] = CONFIG_M | CONFIG_K0
+
 	// After reset a MIPS core starts in kernel mode with BEV set and the
 	// error level flag asserted, so exceptions use the ROM vectors.
 	c.CP0[CP0_STATUS] = STATUS_BEV | STATUS_ERL

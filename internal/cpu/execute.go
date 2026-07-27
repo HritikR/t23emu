@@ -1152,13 +1152,33 @@ func (c *CPU) executeCOP0(inst Instruction) {
 }
 
 func (c *CPU) executeMFC0(inst Instruction) {
-	c.WriteRegister(inst.Rt, c.CP0[inst.Rd])
+	c.WriteRegister(inst.Rt, c.readCP0(inst.Rd, inst.Raw&7))
 	c.retire()
 }
 
 func (c *CPU) executeMTC0(inst Instruction) {
-	c.CP0[inst.Rd] = c.ReadRegister(inst.Rt)
+	c.writeCP0(inst.Rd, inst.Raw&7, c.ReadRegister(inst.Rt))
 	c.retire()
+}
+
+func (c *CPU) readCP0(rd uint8, sel uint32) uint32 {
+	switch rd {
+	case CP0_CONFIG:
+		if sel == 1 {
+			return CP0_CONFIG1_RESET
+		}
+	}
+	return c.CP0[rd]
+}
+
+func (c *CPU) writeCP0(rd uint8, sel uint32, value uint32) {
+	switch rd {
+	case CP0_CONFIG:
+		if sel != 0 {
+			return
+		}
+	}
+	c.CP0[rd] = value
 }
 
 func (c *CPU) executeERET(inst Instruction) {

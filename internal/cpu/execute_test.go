@@ -584,6 +584,27 @@ func TestExecuteCOP0_MTC0_MFC0(t *testing.T) {
 	}
 }
 
+func TestCP0ConfigAdvertisesConfig1(t *testing.T) {
+	cpu := createTestCPU()
+
+	if got := cpu.CP0[CP0_CONFIG]; got&CONFIG_M == 0 {
+		t.Fatalf("expected Config.M to be set, got 0x%08X", got)
+	}
+
+	// mfc0 $t0, Config, 1
+	cpu.Execute(Instruction{
+		Raw:    1,
+		Opcode: OP_COP0,
+		Rs:     COP0_MFC0,
+		Rt:     8,
+		Rd:     CP0_CONFIG,
+	})
+
+	if got := cpu.ReadRegister(8); got != CP0_CONFIG1_RESET {
+		t.Fatalf("expected Config1 0x%08X, got 0x%08X", CP0_CONFIG1_RESET, got)
+	}
+}
+
 func TestExecuteERET(t *testing.T) {
 	cpu := createTestCPU()
 	cpu.CP0[14] = 0x80001000 // EPC
