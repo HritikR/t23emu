@@ -8,7 +8,7 @@ import (
 
 func TestMachineCreation(t *testing.T) {
 
-	m := New(1024)
+	m := New(1024, nil)
 
 	if m.CPU == nil {
 		t.Fatalf(
@@ -31,7 +31,7 @@ func TestMachineCreation(t *testing.T) {
 
 func TestMachineLoadProgram(t *testing.T) {
 
-	m := New(1024)
+	m := New(1024, nil)
 
 	program := []uint32{
 
@@ -69,7 +69,7 @@ func TestMachineLoadProgram(t *testing.T) {
 
 func TestMachineReset(t *testing.T) {
 
-	m := New(1024)
+	m := New(1024, nil)
 
 	m.CPU.WriteRegister(
 		8,
@@ -106,7 +106,7 @@ func TestMachineReset(t *testing.T) {
 
 func TestMachineRunADDIProgram(t *testing.T) {
 
-	m := New(1024)
+	m := New(1024, nil)
 
 	program := []uint32{
 
@@ -147,7 +147,7 @@ func TestMachineRunADDIProgram(t *testing.T) {
 
 func TestMachineRunMultipleInstructions(t *testing.T) {
 
-	m := New(1024)
+	m := New(1024, nil)
 
 	program := []uint32{
 
@@ -206,7 +206,7 @@ func TestMachineRunMultipleInstructions(t *testing.T) {
 
 func TestMachineRunWithCycleLimit(t *testing.T) {
 
-	m := New(1024)
+	m := New(1024, nil)
 
 	program := []uint32{
 
@@ -238,6 +238,47 @@ func TestMachineRunWithCycleLimit(t *testing.T) {
 		t.Fatalf(
 			"expected CPU cycles=5 got %d",
 			m.CPU.Cycles,
+		)
+	}
+}
+
+func TestMachineWithROM(t *testing.T) {
+
+	romData := []byte{
+		0x78,
+		0x56,
+		0x34,
+		0x12,
+	}
+
+	m := New(1024, romData)
+
+	if m.ROM == nil {
+		t.Fatalf(
+			"ROM was not created",
+		)
+	}
+
+	value := m.Bus.Read32(ROMStart)
+
+	if value != 0x12345678 {
+		t.Fatalf(
+			"expected 0x12345678, got 0x%08X",
+			value,
+		)
+	}
+
+	m.Bus.Write32(
+		ROMStart,
+		0x99999999,
+	)
+
+	valueAfterWrite := m.Bus.Read32(ROMStart)
+
+	if valueAfterWrite != 0x12345678 {
+		t.Fatalf(
+			"ROM data changed after write: got 0x%08X",
+			valueAfterWrite,
 		)
 	}
 }

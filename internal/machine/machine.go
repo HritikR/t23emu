@@ -3,19 +3,24 @@ package machine
 import (
 	"github.com/HritikR/t23emu/internal/bus"
 	"github.com/HritikR/t23emu/internal/cpu"
+	"github.com/HritikR/t23emu/internal/device"
 	"github.com/HritikR/t23emu/internal/memory"
 )
+
+const ROMStart uint32 = 0xbfc00000
 
 type Machine struct {
 	CPU *cpu.CPU
 
 	RAM *memory.RAM
 
+	ROM *device.ROM
+
 	Bus *bus.Bus
 }
 
 // New creates a new T23 emulator machine.
-func New(ramSize uint32) *Machine {
+func New(ramSize uint32, romData []byte) *Machine {
 
 	ram := memory.NewRAM(
 		ramSize,
@@ -29,6 +34,16 @@ func New(ramSize uint32) *Machine {
 		ram,
 	)
 
+	var rom *device.ROM
+	if len(romData) > 0 {
+		rom = device.NewROM(romData)
+		b.Map(
+			ROMStart,
+			ROMStart+uint32(len(romData))-1,
+			rom,
+		)
+	}
+
 	c := cpu.New(
 		b,
 	)
@@ -36,6 +51,7 @@ func New(ramSize uint32) *Machine {
 	return &Machine{
 		CPU: c,
 		RAM: ram,
+		ROM: rom,
 		Bus: b,
 	}
 }
