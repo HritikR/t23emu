@@ -12,10 +12,11 @@ const (
 	OP_BNE uint8 = 5
 
 	// Arithmetic/Logical immediate
-	OP_ADDI uint8 = 8
-	OP_ANDI uint8 = 12
-	OP_ORI  uint8 = 13
-	OP_LUI  uint8 = 15
+	OP_ADDI  uint8 = 8
+	OP_ADDIU uint8 = 9
+	OP_ANDI  uint8 = 12
+	OP_ORI   uint8 = 13
+	OP_LUI   uint8 = 15
 
 	// Coprocessor 0
 	OP_COP0 uint8 = 16

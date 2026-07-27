@@ -60,7 +60,12 @@ func New(ramSize uint32, romData []byte) *Machine {
 	)
 
 	if rom != nil {
-		c.ResetPC = ROMStart
+		resetPC := ROMStart
+		// Detect Ingenic boot header signature (typically 2KB offset 0x800)
+		if len(romData) > 0x800 && romData[4] == 0x02 && romData[5] == 0x55 && romData[6] == 0xAA && romData[7] == 0x55 && romData[8] == 0xAA {
+			resetPC = ROMStart + 0x800
+		}
+		c.ResetPC = resetPC
 		c.Reset()
 	}
 

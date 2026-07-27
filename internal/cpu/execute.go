@@ -27,6 +27,10 @@ func (c *CPU) Execute(inst Instruction) {
 
 		c.executeADDI(inst)
 
+	case OP_ADDIU:
+
+		c.executeADDI(inst)
+
 	case OP_ANDI:
 		c.executeANDI(inst)
 
