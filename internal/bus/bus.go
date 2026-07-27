@@ -102,3 +102,21 @@ func (b *Bus) Write32(
 	)
 }
 
+// Read16 reads a halfword. The device interface only exposes byte and
+// word access, so halfwords are assembled from two little-endian byte
+// accesses. This keeps every device halfword-addressable for free.
+func (b *Bus) Read16(addr uint32) uint16 {
+	lo := uint16(b.Read8(addr))
+	hi := uint16(b.Read8(addr + 1))
+	return lo | hi<<8
+}
+
+// Write16 writes a halfword as two little-endian byte accesses.
+func (b *Bus) Write16(
+	addr uint32,
+	value uint16,
+) {
+	b.Write8(addr, byte(value))
+	b.Write8(addr+1, byte(value>>8))
+}
+
