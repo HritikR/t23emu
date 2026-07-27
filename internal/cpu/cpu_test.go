@@ -11,7 +11,13 @@ func createTestCPU() *CPU {
 
 	ram := memory.NewRAM(1024)
 
-	b := bus.New(ram)
+	b := bus.New()
+
+	b.Map(
+		0x00000000,
+		0x000003FF,
+		ram,
+	)
 
 	cpu := New(b)
 
@@ -22,16 +28,15 @@ func TestCPUReset(t *testing.T) {
 
 	cpu := createTestCPU()
 
-	// Modify state
 	cpu.Regs[1] = 123
 	cpu.PC = 0x1000
 	cpu.Instruction = 0xDEADBEEF
 	cpu.Running = true
 
-	// Reset
 	cpu.Reset()
 
 	if cpu.PC != 0 {
+
 		t.Fatalf(
 			"expected PC=0, got 0x%08X",
 			cpu.PC,
@@ -39,6 +44,7 @@ func TestCPUReset(t *testing.T) {
 	}
 
 	if cpu.Instruction != 0 {
+
 		t.Fatalf(
 			"expected instruction=0, got 0x%08X",
 			cpu.Instruction,
@@ -46,6 +52,7 @@ func TestCPUReset(t *testing.T) {
 	}
 
 	if cpu.Running {
+
 		t.Fatalf(
 			"expected CPU stopped after reset",
 		)
@@ -54,6 +61,7 @@ func TestCPUReset(t *testing.T) {
 	for i, reg := range cpu.Regs {
 
 		if reg != 0 {
+
 			t.Fatalf(
 				"register %d not cleared: %d",
 				i,
@@ -67,9 +75,14 @@ func TestCPUFetch(t *testing.T) {
 
 	ram := memory.NewRAM(1024)
 
-	b := bus.New(ram)
+	b := bus.New()
 
-	// Put fake instruction at address 0
+	b.Map(
+		0,
+		0x3FF,
+		ram,
+	)
+
 	ram.Write32(
 		0,
 		0x12345678,
@@ -107,11 +120,28 @@ func TestCPUFetchMultipleInstructions(t *testing.T) {
 
 	ram := memory.NewRAM(1024)
 
-	b := bus.New(ram)
+	b := bus.New()
 
-	ram.Write32(0, 0x11111111)
-	ram.Write32(4, 0x22222222)
-	ram.Write32(8, 0x33333333)
+	b.Map(
+		0,
+		0x3FF,
+		ram,
+	)
+
+	ram.Write32(
+		0,
+		0x11111111,
+	)
+
+	ram.Write32(
+		4,
+		0x22222222,
+	)
+
+	ram.Write32(
+		8,
+		0x33333333,
+	)
 
 	cpu := New(b)
 

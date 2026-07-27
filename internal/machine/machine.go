@@ -21,7 +21,11 @@ func New(ramSize uint32) *Machine {
 		ramSize,
 	)
 
-	b := bus.New(
+	b := bus.New()
+
+	b.Map(
+		0x00000000,
+		ramSize-1,
 		ram,
 	)
 

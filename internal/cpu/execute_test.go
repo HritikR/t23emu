@@ -7,6 +7,21 @@ import (
 	"github.com/HritikR/t23emu/internal/memory"
 )
 
+func createCPUWithRAM() (*CPU, *memory.RAM) {
+
+	ram := memory.NewRAM(1024)
+
+	b := bus.New()
+
+	b.Map(
+		0x00000000,
+		0x000003FF,
+		ram,
+	)
+
+	return New(b), ram
+}
+
 func TestExecuteNOP(t *testing.T) {
 
 	cpu := createTestCPU()
@@ -45,13 +60,11 @@ func TestExecuteADDI(t *testing.T) {
 
 	cpu.Execute(inst)
 
-	value := cpu.ReadRegister(8)
-
-	if value != 100 {
+	if cpu.ReadRegister(8) != 100 {
 
 		t.Fatalf(
 			"expected 100 got %d",
-			value,
+			cpu.ReadRegister(8),
 		)
 	}
 }
@@ -60,15 +73,8 @@ func TestExecuteADD(t *testing.T) {
 
 	cpu := createTestCPU()
 
-	cpu.WriteRegister(
-		9,
-		10,
-	)
-
-	cpu.WriteRegister(
-		10,
-		20,
-	)
+	cpu.WriteRegister(9, 10)
+	cpu.WriteRegister(10, 20)
 
 	inst := Instruction{
 		Opcode: OP_SPECIAL,
@@ -80,13 +86,11 @@ func TestExecuteADD(t *testing.T) {
 
 	cpu.Execute(inst)
 
-	value := cpu.ReadRegister(8)
-
-	if value != 30 {
+	if cpu.ReadRegister(8) != 30 {
 
 		t.Fatalf(
 			"expected 30 got %d",
-			value,
+			cpu.ReadRegister(8),
 		)
 	}
 }
@@ -95,15 +99,8 @@ func TestExecuteADDZeroRegister(t *testing.T) {
 
 	cpu := createTestCPU()
 
-	cpu.WriteRegister(
-		1,
-		10,
-	)
-
-	cpu.WriteRegister(
-		2,
-		20,
-	)
+	cpu.WriteRegister(1, 10)
+	cpu.WriteRegister(2, 20)
 
 	inst := Instruction{
 		Opcode: OP_SPECIAL,
@@ -127,10 +124,7 @@ func TestExecuteADDIPositive(t *testing.T) {
 
 	cpu := createTestCPU()
 
-	cpu.WriteRegister(
-		1,
-		50,
-	)
+	cpu.WriteRegister(1, 50)
 
 	inst := Instruction{
 		Opcode:    OP_ADDI,
@@ -154,16 +148,13 @@ func TestExecuteADDINegativeImmediate(t *testing.T) {
 
 	cpu := createTestCPU()
 
-	cpu.WriteRegister(
-		1,
-		100,
-	)
+	cpu.WriteRegister(1, 100)
 
 	inst := Instruction{
 		Opcode:    OP_ADDI,
 		Rs:        1,
 		Rt:        2,
-		Immediate: uint16(0xFFFF), // -1
+		Immediate: uint16(0xFFFF),
 	}
 
 	cpu.Execute(inst)
@@ -179,11 +170,7 @@ func TestExecuteADDINegativeImmediate(t *testing.T) {
 
 func TestExecuteLW(t *testing.T) {
 
-	ram := memory.NewRAM(1024)
-
-	b := bus.New(ram)
-
-	cpu := New(b)
+	cpu, ram := createCPUWithRAM()
 
 	ram.Write32(
 		100,
@@ -204,34 +191,21 @@ func TestExecuteLW(t *testing.T) {
 
 	cpu.Execute(inst)
 
-	value := cpu.ReadRegister(2)
-
-	if value != 0x12345678 {
+	if cpu.ReadRegister(2) != 0x12345678 {
 
 		t.Fatalf(
 			"expected 0x12345678 got 0x%08X",
-			value,
+			cpu.ReadRegister(2),
 		)
 	}
 }
 
 func TestExecuteSW(t *testing.T) {
 
-	ram := memory.NewRAM(1024)
+	cpu, ram := createCPUWithRAM()
 
-	b := bus.New(ram)
-
-	cpu := New(b)
-
-	cpu.WriteRegister(
-		1,
-		200,
-	)
-
-	cpu.WriteRegister(
-		2,
-		0xDEADBEEF,
-	)
+	cpu.WriteRegister(1, 200)
+	cpu.WriteRegister(2, 0xDEADBEEF)
 
 	inst := Instruction{
 		Opcode:    OP_SW,
@@ -242,87 +216,70 @@ func TestExecuteSW(t *testing.T) {
 
 	cpu.Execute(inst)
 
-	value := ram.Read32(200)
-
-	if value != 0xDEADBEEF {
+	if ram.Read32(200) != 0xDEADBEEF {
 
 		t.Fatalf(
 			"expected 0xDEADBEEF got 0x%08X",
-			value,
+			ram.Read32(200),
 		)
 	}
 }
 
 func TestCPUFullADDIFlow(t *testing.T) {
 
-	ram := memory.NewRAM(1024)
-
-	b := bus.New(ram)
-
-	// addi $t0,$zero,42
-	//
-	// 0x2008002A
+	cpu, ram := createCPUWithRAM()
 
 	ram.Write32(
 		0,
-		0x2008002A,
+		EncodeI(
+			OP_ADDI,
+			0,
+			8,
+			42,
+		),
 	)
-
-	cpu := New(b)
 
 	cpu.Running = true
 
 	cpu.Step()
 
-	value := cpu.ReadRegister(8)
-
-	if value != 42 {
+	if cpu.ReadRegister(8) != 42 {
 
 		t.Fatalf(
 			"expected 42 got %d",
-			value,
+			cpu.ReadRegister(8),
 		)
 	}
 }
 
 func TestCPUFullADDFlow(t *testing.T) {
 
-	ram := memory.NewRAM(1024)
-
-	b := bus.New(ram)
-
-	// add $t0,$t1,$t2
-	//
-	// 0x012A4020
+	cpu, ram := createCPUWithRAM()
 
 	ram.Write32(
 		0,
-		0x012A4020,
+		EncodeR(
+			OP_SPECIAL,
+			9,
+			10,
+			8,
+			0,
+			FUNCT_ADD,
+		),
 	)
 
-	cpu := New(b)
-
-	cpu.WriteRegister(
-		9,
-		10,
-	)
-
-	cpu.WriteRegister(
-		10,
-		20,
-	)
+	cpu.WriteRegister(9, 10)
+	cpu.WriteRegister(10, 20)
 
 	cpu.Running = true
 
 	cpu.Step()
 
-	value := cpu.ReadRegister(8)
-
-	if value != 30 {
+	if cpu.ReadRegister(8) != 30 {
 
 		t.Fatalf(
 			"expected 30 got %d",
-			value,
+			cpu.ReadRegister(8),
 		)
 	}
 }
