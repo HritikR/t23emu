@@ -8,6 +8,8 @@ import (
 )
 
 const ROMStart uint32 = 0xbfc00000
+const UARTStart uint32 = 0x10000000
+const UARTEnd uint32 = 0x1000000F
 
 type Machine struct {
 	CPU *cpu.CPU
@@ -15,6 +17,8 @@ type Machine struct {
 	RAM *memory.RAM
 
 	ROM *device.ROM
+
+	UART *device.UART
 
 	Bus *bus.Bus
 }
@@ -44,6 +48,13 @@ func New(ramSize uint32, romData []byte) *Machine {
 		)
 	}
 
+	uart := device.NewUART(nil)
+	b.Map(
+		UARTStart,
+		UARTEnd,
+		uart,
+	)
+
 	c := cpu.New(
 		b,
 	)
@@ -54,10 +65,11 @@ func New(ramSize uint32, romData []byte) *Machine {
 	}
 
 	return &Machine{
-		CPU: c,
-		RAM: ram,
-		ROM: rom,
-		Bus: b,
+		CPU:  c,
+		RAM:  ram,
+		ROM:  rom,
+		UART: uart,
+		Bus:  b,
 	}
 }
 

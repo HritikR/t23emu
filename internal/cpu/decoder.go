@@ -26,6 +26,9 @@ type Instruction struct {
 
 	// Immediate value [15:0]
 	Immediate uint16
+
+	// Jump Target [25:0]
+	Target uint32
 }
 
 // Decode converts a raw 32-bit MIPS instruction
@@ -63,5 +66,7 @@ func Decode(raw uint32) Instruction {
 		Immediate: uint16(
 			raw & 0xFFFF,
 		),
+
+		Target: raw & 0x03FFFFFF,
 	}
 }

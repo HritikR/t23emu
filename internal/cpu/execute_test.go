@@ -283,3 +283,268 @@ func TestCPUFullADDFlow(t *testing.T) {
 		)
 	}
 }
+
+func TestExecuteJ(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.PC = 0x10000004
+
+	inst := Instruction{
+		Opcode: OP_J,
+		Target: 0x00A0000, // target << 2 = 0x00280000
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x10280000 {
+		t.Fatalf("expected PC 0x10280000, got 0x%08X", cpu.PC)
+	}
+}
+
+func TestExecuteJAL(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.PC = 0x10000008
+
+	inst := Instruction{
+		Opcode: OP_JAL,
+		Target: 0x00A0000, // target << 2 = 0x00280000
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x10280000 {
+		t.Fatalf("expected PC 0x10280000, got 0x%08X", cpu.PC)
+	}
+
+	if cpu.ReadRegister(31) != 0x10000008 {
+		t.Fatalf("expected $ra (R31) to be 0x10000008, got 0x%08X", cpu.ReadRegister(31))
+	}
+}
+
+func TestExecuteJR(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.WriteRegister(31, 0x00400000)
+
+	inst := Instruction{
+		Opcode: OP_SPECIAL,
+		Rs:     31,
+		Funct:  FUNCT_JR,
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x00400000 {
+		t.Fatalf("expected PC 0x00400000, got 0x%08X", cpu.PC)
+	}
+}
+
+func TestExecuteBEQ(t *testing.T) {
+	// Case 1: Equal (branch taken)
+	cpu := createTestCPU()
+	cpu.PC = 0x1000
+	cpu.WriteRegister(8, 5)
+	cpu.WriteRegister(9, 5)
+
+	inst := Instruction{
+		Opcode:    OP_BEQ,
+		Rs:        8,
+		Rt:        9,
+		Immediate: 4, // 4 instructions forward = 16 bytes
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x1010 {
+		t.Fatalf("BEQ taken: expected PC 0x1010, got 0x%08X", cpu.PC)
+	}
+
+	// Case 2: Not Equal (branch not taken)
+	cpu = createTestCPU()
+	cpu.PC = 0x1000
+	cpu.WriteRegister(8, 5)
+	cpu.WriteRegister(9, 10)
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x1000 {
+		t.Fatalf("BEQ not taken: expected PC 0x1000, got 0x%08X", cpu.PC)
+	}
+}
+
+func TestExecuteBNE(t *testing.T) {
+	// Case 1: Not Equal (branch taken)
+	cpu := createTestCPU()
+	cpu.PC = 0x1000
+	cpu.WriteRegister(8, 5)
+	cpu.WriteRegister(9, 10)
+
+	inst := Instruction{
+		Opcode:    OP_BNE,
+		Rs:        8,
+		Rt:        9,
+		Immediate: 4,
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x1010 {
+		t.Fatalf("BNE taken: expected PC 0x1010, got 0x%08X", cpu.PC)
+	}
+
+	// Case 2: Equal (branch not taken)
+	cpu = createTestCPU()
+	cpu.PC = 0x1000
+	cpu.WriteRegister(8, 5)
+	cpu.WriteRegister(9, 5)
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x1000 {
+		t.Fatalf("BNE not taken: expected PC 0x1000, got 0x%08X", cpu.PC)
+	}
+}
+
+func TestExecuteLUI(t *testing.T) {
+	cpu := createTestCPU()
+
+	inst := Instruction{
+		Opcode:    OP_LUI,
+		Rt:        8,
+		Immediate: 0x1234,
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.ReadRegister(8) != 0x12340000 {
+		t.Fatalf("expected 0x12340000, got 0x%08X", cpu.ReadRegister(8))
+	}
+}
+
+func TestExecuteLogicalOps(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.WriteRegister(8, 0x0F0F0F0F)
+	cpu.WriteRegister(9, 0xF0F0F0F0)
+
+	// AND
+	inst := Instruction{
+		Opcode: OP_SPECIAL,
+		Rs:     8,
+		Rt:     9,
+		Rd:     10,
+		Funct:  FUNCT_AND,
+	}
+	cpu.Execute(inst)
+	if cpu.ReadRegister(10) != 0 {
+		t.Fatalf("AND failed: got 0x%08X", cpu.ReadRegister(10))
+	}
+
+	// OR
+	inst.Funct = FUNCT_OR
+	cpu.Execute(inst)
+	if cpu.ReadRegister(10) != 0xFFFFFFFF {
+		t.Fatalf("OR failed: got 0x%08X", cpu.ReadRegister(10))
+	}
+
+	// XOR
+	inst.Funct = FUNCT_XOR
+	cpu.Execute(inst)
+	if cpu.ReadRegister(10) != 0xFFFFFFFF {
+		t.Fatalf("XOR failed: got 0x%08X", cpu.ReadRegister(10))
+	}
+
+	// NOR
+	inst.Funct = FUNCT_NOR
+	cpu.Execute(inst)
+	if cpu.ReadRegister(10) != 0 {
+		t.Fatalf("NOR failed: got 0x%08X", cpu.ReadRegister(10))
+	}
+}
+
+func TestExecuteANDI_ORI(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.WriteRegister(8, 0x00FF00FF)
+
+	// ANDI
+	inst := Instruction{
+		Opcode:    OP_ANDI,
+		Rs:        8,
+		Rt:        9,
+		Immediate: 0x000F,
+	}
+	cpu.Execute(inst)
+	if cpu.ReadRegister(9) != 0x0000000F {
+		t.Fatalf("ANDI failed: got 0x%08X", cpu.ReadRegister(9))
+	}
+
+	// ORI
+	inst = Instruction{
+		Opcode:    OP_ORI,
+		Rs:        8,
+		Rt:        10,
+		Immediate: 0xF000,
+	}
+	cpu.Execute(inst)
+	if cpu.ReadRegister(10) != 0x00FFF0FF {
+		t.Fatalf("ORI failed: got 0x%08X", cpu.ReadRegister(10))
+	}
+}
+
+func TestExecuteShifts(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.WriteRegister(8, 0x000000F0)
+
+	// SLL
+	inst := Instruction{
+		Opcode: OP_SPECIAL,
+		Rt:     8,
+		Rd:     9,
+		Shamt:  4,
+		Funct:  FUNCT_SLL,
+	}
+	cpu.Execute(inst)
+	if cpu.ReadRegister(9) != 0x00000F00 {
+		t.Fatalf("SLL failed: got 0x%08X", cpu.ReadRegister(9))
+	}
+
+	// SRL
+	inst.Funct = FUNCT_SRL
+	cpu.Execute(inst)
+	if cpu.ReadRegister(9) != 0x0000000F {
+		t.Fatalf("SRL failed: got 0x%08X", cpu.ReadRegister(9))
+	}
+
+	// SRA (arithmetic shift right, sign-preserving)
+	cpu.WriteRegister(8, 0xF0000000)
+	inst.Rt = 8
+	inst.Rd = 9
+	inst.Shamt = 4
+	inst.Funct = FUNCT_SRA
+	cpu.Execute(inst)
+	if cpu.ReadRegister(9) != 0xFF000000 {
+		t.Fatalf("SRA failed: got 0x%08X", cpu.ReadRegister(9))
+	}
+}
+
+func TestExecuteSLT(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.WriteRegister(8, 0xFFFFFFFF) // -1 signed
+	cpu.WriteRegister(9, 1)
+
+	inst := Instruction{
+		Opcode: OP_SPECIAL,
+		Rs:     8,
+		Rt:     9,
+		Rd:     10,
+		Funct:  FUNCT_SLT,
+	}
+	cpu.Execute(inst)
+	if cpu.ReadRegister(10) != 1 {
+		t.Fatalf("SLT: expected -1 < 1 to write 1, got %d", cpu.ReadRegister(10))
+	}
+
+	cpu.WriteRegister(8, 5)
+	cpu.WriteRegister(9, 2)
+	cpu.Execute(inst)
+	if cpu.ReadRegister(10) != 0 {
+		t.Fatalf("SLT: expected 5 < 2 to write 0, got %d", cpu.ReadRegister(10))
+	}
+}

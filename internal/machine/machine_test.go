@@ -27,6 +27,12 @@ func TestMachineCreation(t *testing.T) {
 			"RAM was not created",
 		)
 	}
+
+	if m.UART == nil {
+		t.Fatalf(
+			"UART was not created",
+		)
+	}
 }
 
 func TestMachineLoadProgram(t *testing.T) {
@@ -349,6 +355,70 @@ func TestMachineBootFromROM(t *testing.T) {
 		t.Fatalf(
 			"expected RAM address 100 to contain 42, got %d",
 			ramVal,
+		)
+	}
+}
+
+func TestMachineUARTConsole(t *testing.T) {
+
+	// Build a program to write to UART:
+	// 1. lui $t1, 0x1000       => Set $t1 (register 9) to UART base address (0x10000000)
+	// 2. addi $t0, $zero, 0x41  => Load 'A' into $t0 (register 8)
+	// 3. sw $t0, 0($t1)        => Write 'A' to UART TX
+	// 4. addi $t0, $zero, 0x42  => Load 'B' into $t0 (register 8)
+	// 5. sw $t0, 0($t1)        => Write 'B' to UART TX
+	program := []uint32{
+		cpu.EncodeI(
+			cpu.OP_LUI,
+			0,
+			9,
+			0x1000,
+		),
+		cpu.EncodeI(
+			cpu.OP_ADDI,
+			0,
+			8,
+			0x41,
+		),
+		cpu.EncodeI(
+			cpu.OP_SW,
+			9,
+			8,
+			0,
+		),
+		cpu.EncodeI(
+			cpu.OP_ADDI,
+			0,
+			8,
+			0x42,
+		),
+		cpu.EncodeI(
+			cpu.OP_SW,
+			9,
+			8,
+			0,
+		),
+	}
+
+	m := New(1024, nil)
+	m.LoadProgram(0, program)
+
+	// Run the program (5 instructions)
+	cycles := m.Run(5)
+
+	if cycles != 5 {
+		t.Fatalf(
+			"expected 5 cycles, got %d",
+			cycles,
+		)
+	}
+
+	// Verify the captured UART output
+	output := m.UART.GetCapturedOutput()
+	if output != "AB" {
+		t.Fatalf(
+			"expected UART output 'AB', got '%s'",
+			output,
 		)
 	}
 }

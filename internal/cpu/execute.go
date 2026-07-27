@@ -11,9 +11,30 @@ func (c *CPU) Execute(inst Instruction) {
 
 		c.executeRType(inst)
 
+	case OP_J:
+		c.executeJ(inst)
+
+	case OP_JAL:
+		c.executeJAL(inst)
+
+	case OP_BEQ:
+		c.executeBEQ(inst)
+
+	case OP_BNE:
+		c.executeBNE(inst)
+
 	case OP_ADDI:
 
 		c.executeADDI(inst)
+
+	case OP_ANDI:
+		c.executeANDI(inst)
+
+	case OP_ORI:
+		c.executeORI(inst)
+
+	case OP_LUI:
+		c.executeLUI(inst)
 
 	case OP_LW:
 		c.executeLW(inst)
@@ -40,19 +61,35 @@ func (c *CPU) executeRType(inst Instruction) {
 	switch inst.Funct {
 
 	case FUNCT_SLL:
+		c.executeSLL(inst)
 
-		// NOP is encoded as:
-		//
-		// sll $zero,$zero,0
-		//
-		// Because writing to $zero has no effect,
-		// this naturally does nothing.
+	case FUNCT_SRL:
+		c.executeSRL(inst)
 
-		return
+	case FUNCT_SRA:
+		c.executeSRA(inst)
+
+	case FUNCT_JR:
+		c.executeJR(inst)
 
 	case FUNCT_ADD:
 
 		c.executeADD(inst)
+
+	case FUNCT_AND:
+		c.executeAND(inst)
+
+	case FUNCT_OR:
+		c.executeOR(inst)
+
+	case FUNCT_XOR:
+		c.executeXOR(inst)
+
+	case FUNCT_NOR:
+		c.executeNOR(inst)
+
+	case FUNCT_SLT:
+		c.executeSLT(inst)
 
 	default:
 
@@ -162,4 +199,101 @@ func (c *CPU) executeSW(inst Instruction) {
 		address,
 		value,
 	)
+}
+
+func (c *CPU) executeJ(inst Instruction) {
+	c.PC = (c.PC & 0xF0000000) | (inst.Target << 2)
+}
+
+func (c *CPU) executeJAL(inst Instruction) {
+	c.WriteRegister(31, c.PC)
+	c.PC = (c.PC & 0xF0000000) | (inst.Target << 2)
+}
+
+func (c *CPU) executeJR(inst Instruction) {
+	c.PC = c.ReadRegister(inst.Rs)
+}
+
+func (c *CPU) executeBEQ(inst Instruction) {
+	rs := c.ReadRegister(inst.Rs)
+	rt := c.ReadRegister(inst.Rt)
+	if rs == rt {
+		offset := int32(int16(inst.Immediate)) << 2
+		c.PC = uint32(int32(c.PC) + offset)
+	}
+}
+
+func (c *CPU) executeBNE(inst Instruction) {
+	rs := c.ReadRegister(inst.Rs)
+	rt := c.ReadRegister(inst.Rt)
+	if rs != rt {
+		offset := int32(int16(inst.Immediate)) << 2
+		c.PC = uint32(int32(c.PC) + offset)
+	}
+}
+
+func (c *CPU) executeLUI(inst Instruction) {
+	value := uint32(inst.Immediate) << 16
+	c.WriteRegister(inst.Rt, value)
+}
+
+func (c *CPU) executeANDI(inst Instruction) {
+	rs := c.ReadRegister(inst.Rs)
+	imm := uint32(inst.Immediate)
+	c.WriteRegister(inst.Rt, rs & imm)
+}
+
+func (c *CPU) executeORI(inst Instruction) {
+	rs := c.ReadRegister(inst.Rs)
+	imm := uint32(inst.Immediate)
+	c.WriteRegister(inst.Rt, rs | imm)
+}
+
+func (c *CPU) executeAND(inst Instruction) {
+	rs := c.ReadRegister(inst.Rs)
+	rt := c.ReadRegister(inst.Rt)
+	c.WriteRegister(inst.Rd, rs & rt)
+}
+
+func (c *CPU) executeOR(inst Instruction) {
+	rs := c.ReadRegister(inst.Rs)
+	rt := c.ReadRegister(inst.Rt)
+	c.WriteRegister(inst.Rd, rs | rt)
+}
+
+func (c *CPU) executeXOR(inst Instruction) {
+	rs := c.ReadRegister(inst.Rs)
+	rt := c.ReadRegister(inst.Rt)
+	c.WriteRegister(inst.Rd, rs ^ rt)
+}
+
+func (c *CPU) executeNOR(inst Instruction) {
+	rs := c.ReadRegister(inst.Rs)
+	rt := c.ReadRegister(inst.Rt)
+	c.WriteRegister(inst.Rd, ^(rs | rt))
+}
+
+func (c *CPU) executeSLT(inst Instruction) {
+	rs := int32(c.ReadRegister(inst.Rs))
+	rt := int32(c.ReadRegister(inst.Rt))
+	if rs < rt {
+		c.WriteRegister(inst.Rd, 1)
+	} else {
+		c.WriteRegister(inst.Rd, 0)
+	}
+}
+
+func (c *CPU) executeSLL(inst Instruction) {
+	rt := c.ReadRegister(inst.Rt)
+	c.WriteRegister(inst.Rd, rt << inst.Shamt)
+}
+
+func (c *CPU) executeSRL(inst Instruction) {
+	rt := c.ReadRegister(inst.Rt)
+	c.WriteRegister(inst.Rd, rt >> inst.Shamt)
+}
+
+func (c *CPU) executeSRA(inst Instruction) {
+	rt := int32(c.ReadRegister(inst.Rt))
+	c.WriteRegister(inst.Rd, uint32(rt >> inst.Shamt))
 }
