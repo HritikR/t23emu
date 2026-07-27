@@ -1,0 +1,10 @@
+package cpu
+
+const (
+
+	// SPECIAL opcode for R-type instructions
+	OP_SPECIAL uint8 = 0
+
+	// ADD immediate
+	OP_ADDI uint8 = 8
+)
