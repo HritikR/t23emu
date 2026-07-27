@@ -47,7 +47,7 @@ func main() {
 
 	blocks := map[string]*device.RegisterBlock{
 		"CPM":    m.CPM,
-		"INTC":   m.INTC,
+		"INTC":   m.INTC.RegisterBlock,
 		"TCU":    m.TCU,
 		"GPIO":   m.GPIO,
 		"DDRC":   m.DDRC,

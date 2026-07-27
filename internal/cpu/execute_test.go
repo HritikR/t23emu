@@ -605,6 +605,55 @@ func TestCP0ConfigAdvertisesConfig1(t *testing.T) {
 	}
 }
 
+func TestStepTakesExternalInterrupt(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	ram.Write32(0, 0)
+	cpu.PC = 0
+	cpu.NextPC = 4
+	cpu.CP0[CP0_STATUS] = STATUS_IE | CAUSE_IP2
+	cpu.InterruptPending = func() uint32 { return CAUSE_IP2 }
+	cpu.Running = true
+
+	cpu.Step()
+
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected interrupt vector 0x80000180, got 0x%08X", cpu.PC)
+	}
+	if got := uint8((cpu.CP0[CP0_CAUSE] & CAUSE_EXCCODE) >> 2); got != EXC_INT {
+		t.Fatalf("expected interrupt exception code, got %d", got)
+	}
+	if cpu.CP0[CP0_EPC] != 0 {
+		t.Fatalf("expected EPC 0, got 0x%08X", cpu.CP0[CP0_EPC])
+	}
+}
+
+func TestExternalInterruptWaitsForBranchDelaySlot(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	ram.Write32(0, 0x10000001) // beq $zero, $zero, 0x8
+	ram.Write32(4, 0)          // delay slot
+	cpu.PC = 0
+	cpu.NextPC = 4
+	cpu.CP0[CP0_STATUS] = STATUS_IE | CAUSE_IP2
+	cpu.InterruptPending = func() uint32 { return CAUSE_IP2 }
+	cpu.Running = true
+
+	cpu.Step()
+	cpu.Step()
+
+	if cpu.PC != 8 {
+		t.Fatalf("expected delay slot to run before interrupt, got PC 0x%08X", cpu.PC)
+	}
+
+	cpu.Step()
+
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected interrupt after delay slot, got PC 0x%08X", cpu.PC)
+	}
+	if cpu.CP0[CP0_EPC] != 8 {
+		t.Fatalf("expected EPC at branch target, got 0x%08X", cpu.CP0[CP0_EPC])
+	}
+}
+
 func TestExecuteERET(t *testing.T) {
 	cpu := createTestCPU()
 	cpu.CP0[14] = 0x80001000 // EPC

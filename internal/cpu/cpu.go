@@ -67,6 +67,10 @@ type CPU struct {
 	// Coprocessor 0 registers
 	CP0 [32]uint32
 
+	// InterruptPending returns CP0 Cause.IP bits currently asserted by
+	// external interrupt hardware.
+	InterruptPending func() uint32
+
 	// LLBit is the load-linked bit set by LL and tested by SC.
 	LLBit bool
 
@@ -175,6 +179,11 @@ func (c *CPU) Step() {
 		return
 	}
 
+	if !c.branchTaken && c.checkInterrupts() {
+		c.Cycles++
+		return
+	}
+
 	// Address Error check for Fetch
 	if !c.Bus.HasMapping(c.PC) {
 		c.CurrentPC = c.PC
@@ -207,6 +216,27 @@ func (c *CPU) Step() {
 	c.Execute(inst)
 
 	c.Cycles++
+}
+
+func (c *CPU) checkInterrupts() bool {
+	pending := uint32(0)
+	if c.InterruptPending != nil {
+		pending = c.InterruptPending() & CAUSE_IP
+	}
+
+	c.CP0[CP0_CAUSE] = (c.CP0[CP0_CAUSE] & ^CAUSE_IP) | pending
+
+	status := c.CP0[CP0_STATUS]
+	if status&STATUS_IE == 0 || status&(STATUS_EXL|STATUS_ERL) != 0 {
+		return false
+	}
+	if pending&status&STATUS_IM == 0 {
+		return false
+	}
+
+	c.CurrentPC = c.PC
+	c.Exception(EXC_INT, 0)
+	return true
 }
 
 // Run executes the CPU loop.

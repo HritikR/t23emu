@@ -110,6 +110,7 @@ const (
 	STATUS_EXL uint32 = 1 << 1  // Exception level
 	STATUS_ERL uint32 = 1 << 2  // Error level
 	STATUS_BEV uint32 = 1 << 22 // Bootstrap exception vectors
+	STATUS_IM  uint32 = 0x0000FF00
 )
 
 // CP0 Cause register bits
@@ -117,6 +118,8 @@ const (
 	CAUSE_EXCCODE uint32 = 0x7C       // ExcCode field, bits 6:2
 	CAUSE_BD      uint32 = 1 << 31    // Exception occurred in a branch delay slot
 	CAUSE_CE      uint32 = 0x30000000 // Coprocessor number for a CpU exception
+	CAUSE_IP      uint32 = 0x0000FF00 // Interrupt pending bits, bits 15:8
+	CAUSE_IP2     uint32 = 1 << 10    // Hardware interrupt line 0
 )
 
 const (

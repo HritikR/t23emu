@@ -111,7 +111,7 @@ type Machine struct {
 	CPM *device.RegisterBlock
 
 	// INTC is the interrupt controller.
-	INTC *device.RegisterBlock
+	INTC *device.INTC
 
 	// TCU is the watchdog, timer/counter and OS timer block.
 	TCU *device.RegisterBlock
@@ -175,7 +175,7 @@ func New(ramSize uint32, romData []byte) *Machine {
 	cpm := device.NewCPM()
 	b.Map(CPMStart, CPMEnd, cpm)
 
-	intc := device.NewRegisterBlock("INTC", INTCEnd-INTCStart+1)
+	intc := device.NewINTC()
 	b.Map(INTCStart, INTCEnd, intc)
 
 	// The timer block needs a tick source, but the CPU that provides it
@@ -245,6 +245,17 @@ func New(ramSize uint32, romData []byte) *Machine {
 	c := cpu.New(b)
 
 	cpuCycles = func() uint64 { return c.Cycles }
+	nextTimerIRQ := uint64(200000)
+	c.InterruptPending = func() uint32 {
+		if c.Cycles >= nextTimerIRQ {
+			intc.Assert(3)
+			nextTimerIRQ = c.Cycles + 200000
+		}
+		if intc.Pending() != 0 {
+			return cpu.CAUSE_IP2
+		}
+		return 0
+	}
 
 	if len(romData) > 0 {
 		c.ResetPC = resetPC
