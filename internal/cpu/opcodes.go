@@ -22,8 +22,12 @@ const (
 	OP_COP0 uint8 = 16
 
 	// Memory
-	OP_LW uint8 = 35
-	OP_SW uint8 = 43
+	OP_LB    uint8 = 32
+	OP_LW    uint8 = 35
+	OP_LBU   uint8 = 36
+	OP_SB    uint8 = 40
+	OP_SW    uint8 = 43
+	OP_CACHE uint8 = 47
 )
 
 // Coprocessor 0 register indices

@@ -1,6 +1,8 @@
 package cpu
 
 import (
+	"fmt"
+
 	"github.com/HritikR/t23emu/internal/bus"
 )
 
@@ -32,6 +34,9 @@ type CPU struct {
 
 	// Coprocessor 0 registers
 	CP0 [32]uint32
+
+	// Instruction tracing
+	Trace bool
 }
 
 // New creates a new CPU instance
@@ -100,9 +105,15 @@ func (c *CPU) Step() {
 		return
 	}
 
+	pc := c.PC
 	raw := c.Fetch()
 
 	inst := Decode(raw)
+
+	if c.Trace {
+		fmt.Printf("[%06d] PC=0x%08X  Raw=0x%08X  Op=%d Rs=%d Rt=%d Rd=%d Funct=%d Imm=0x%04X\n",
+			c.Cycles, pc, raw, inst.Opcode, inst.Rs, inst.Rt, inst.Rd, inst.Funct, inst.Immediate)
+	}
 
 	c.Execute(inst)
 

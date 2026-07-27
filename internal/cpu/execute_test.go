@@ -764,3 +764,70 @@ func TestStepAddressErrorException(t *testing.T) {
 		t.Fatalf("expected EPC to be invalid fetch PC, got 0x%08X", cpu.CP0[14])
 	}
 }
+
+func TestExecuteByteAccess(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+
+	// Write 0x8A to address 10 (RAM is byte-addressable via RAM.Data slice)
+	// RAM struct has Data field, but RAM.Write32 writes 4 bytes. We can just write using Write32 or Write8.
+	// Wait, memory.RAM does not expose Write8/Read8 publicly? Let's check ram.go.
+	// Oh, RAM does expose Write32/Read32 but wait, does RAM support Write8?
+	// Let's check TestRAMReadWrite8 in ram_test.go. Yes, ram.Write8 is called there!
+	// So we can write directly using ram.Write8(10, 0x8A)!
+	ram.Write8(10, 0x8A)
+
+	cpu.WriteRegister(1, 8)
+
+	// LBU $t0, 2($t1) => reads offset 10 (8 + 2)
+	instLbu := Instruction{
+		Opcode:    OP_LBU,
+		Rs:        1,
+		Rt:        8,
+		Immediate: 2,
+	}
+
+	cpu.Execute(instLbu)
+	if cpu.ReadRegister(8) != 0x8A {
+		t.Fatalf("LBU failed: expected 0x8A, got 0x%08X", cpu.ReadRegister(8))
+	}
+
+	// LB $t0, 2($t1) => reads offset 10, sign extends to 0xFFFFFF8A
+	instLb := Instruction{
+		Opcode:    OP_LB,
+		Rs:        1,
+		Rt:        8,
+		Immediate: 2,
+	}
+
+	cpu.Execute(instLb)
+	if cpu.ReadRegister(8) != 0xFFFFFF8A {
+		t.Fatalf("LB failed: expected 0xFFFFFF8A, got 0x%08X", cpu.ReadRegister(8))
+	}
+
+	// SB $t0, 3($t1) => writes bottom byte 0x8A to offset 11 (8 + 3)
+	cpu.WriteRegister(8, 0x1234568A)
+	instSb := Instruction{
+		Opcode:    OP_SB,
+		Rs:        1,
+		Rt:        8,
+		Immediate: 3,
+	}
+
+	cpu.Execute(instSb)
+	val8 := ram.Read8(11)
+	if val8 != 0x8A {
+		t.Fatalf("SB failed: expected byte at 11 to be 0x8A, got 0x%02X", val8)
+	}
+}
+
+func TestExecuteCACHE(t *testing.T) {
+	cpu := createTestCPU()
+	inst := Instruction{
+		Opcode: OP_CACHE,
+	}
+	// Verify it executes cleanly without panic or exception
+	cpu.Execute(inst)
+	if cpu.PC != 0 {
+		t.Fatalf("CACHE should be treated as NOP, PC changed: 0x%08X", cpu.PC)
+	}
+}

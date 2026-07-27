@@ -320,11 +320,10 @@ func TestMachineBootFromROM(t *testing.T) {
 
 	m := New(1024, romData)
 
-	// Verify CPU PC is initialized to ROMStart
-	if m.CPU.PC != ROMStart {
+	// Verify CPU PC is initialized to virtual boot address 0xbfc00000
+	if m.CPU.PC != 0xbfc00000 {
 		t.Fatalf(
-			"expected PC to be ROMStart (0x%08X), got 0x%08X",
-			ROMStart,
+			"expected PC to be 0xbfc00000, got 0x%08X",
 			m.CPU.PC,
 		)
 	}
@@ -372,7 +371,7 @@ func TestMachineUARTConsole(t *testing.T) {
 			cpu.OP_LUI,
 			0,
 			9,
-			0x1000,
+			0x1003,
 		),
 		cpu.EncodeI(
 			cpu.OP_ADDI,

@@ -40,11 +40,23 @@ func (c *CPU) Execute(inst Instruction) {
 	case OP_LUI:
 		c.executeLUI(inst)
 
+	case OP_LB:
+		c.executeLB(inst)
+
+	case OP_LBU:
+		c.executeLBU(inst)
+
 	case OP_LW:
 		c.executeLW(inst)
 
+	case OP_SB:
+		c.executeSB(inst)
+
 	case OP_SW:
 		c.executeSW(inst)
+
+	case OP_CACHE:
+		c.executeCACHE(inst)
 
 	case OP_COP0:
 		c.executeCOP0(inst)
@@ -341,4 +353,50 @@ func (c *CPU) executeERET(inst Instruction) {
 	c.PC = c.CP0[CP0_EPC]
 	// Clear the EXL (Exception Level) bit (bit 1) in Status register
 	c.CP0[CP0_STATUS] &= ^uint32(0x2)
+}
+
+func (c *CPU) executeLB(inst Instruction) {
+	base := c.ReadRegister(inst.Rs)
+	offset := int32(int16(inst.Immediate))
+	address := uint32(int32(base) + offset)
+
+	if !c.Bus.HasMapping(address) {
+		c.Exception(EXC_ADEL, address)
+		return
+	}
+
+	value := int8(c.Bus.Read8(address))
+	c.WriteRegister(inst.Rt, uint32(int32(value)))
+}
+
+func (c *CPU) executeLBU(inst Instruction) {
+	base := c.ReadRegister(inst.Rs)
+	offset := int32(int16(inst.Immediate))
+	address := uint32(int32(base) + offset)
+
+	if !c.Bus.HasMapping(address) {
+		c.Exception(EXC_ADEL, address)
+		return
+	}
+
+	value := c.Bus.Read8(address)
+	c.WriteRegister(inst.Rt, uint32(value))
+}
+
+func (c *CPU) executeSB(inst Instruction) {
+	base := c.ReadRegister(inst.Rs)
+	offset := int32(int16(inst.Immediate))
+	address := uint32(int32(base) + offset)
+
+	if !c.Bus.HasMapping(address) {
+		c.Exception(EXC_ADES, address)
+		return
+	}
+
+	value := byte(c.ReadRegister(inst.Rt))
+	c.Bus.Write8(address, value)
+}
+
+func (c *CPU) executeCACHE(inst Instruction) {
+	// Ignore cache instructions (treat as NOP)
 }

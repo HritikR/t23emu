@@ -29,19 +29,23 @@ func (b *Bus) Map(
 	)
 }
 
+func (b *Bus) translate(addr uint32) uint32 {
+	// kseg0 (0x80000000 - 0x9FFFFFFF) and kseg1 (0xA0000000 - 0xBFFFFFFF)
+	// map directly to physical memory starting at 0x00000000 (clear top 3 bits)
+	if addr >= 0x80000000 && addr < 0xC0000000 {
+		return addr & 0x1FFFFFFF
+	}
+	return addr
+}
+
 func (b *Bus) find(addr uint32) *Mapping {
-
+	phys := b.translate(addr)
 	for i := range b.mappings {
-
 		m := &b.mappings[i]
-
-		if addr >= m.Start &&
-			addr <= m.End {
-
+		if phys >= m.Start && phys <= m.End {
 			return m
 		}
 	}
-
 	return nil
 }
 
@@ -51,57 +55,49 @@ func (b *Bus) HasMapping(addr uint32) bool {
 }
 
 func (b *Bus) Read8(addr uint32) byte {
-
 	m := b.find(addr)
-
 	if m == nil {
 		panic("bus: unmapped read8")
 	}
-
-	return m.Device.Read8(addr - m.Start)
+	phys := b.translate(addr)
+	return m.Device.Read8(phys - m.Start)
 }
 
 func (b *Bus) Write8(
 	addr uint32,
 	value byte,
 ) {
-
 	m := b.find(addr)
-
 	if m == nil {
 		panic("bus: unmapped write8")
 	}
-
+	phys := b.translate(addr)
 	m.Device.Write8(
-		addr - m.Start,
+		phys - m.Start,
 		value,
 	)
 }
 
 func (b *Bus) Read32(addr uint32) uint32 {
-
 	m := b.find(addr)
-
 	if m == nil {
 		panic("bus: unmapped read32")
 	}
-
-	return m.Device.Read32(addr - m.Start)
+	phys := b.translate(addr)
+	return m.Device.Read32(phys - m.Start)
 }
 
 func (b *Bus) Write32(
 	addr uint32,
 	value uint32,
 ) {
-
 	m := b.find(addr)
-
 	if m == nil {
 		panic("bus: unmapped write32")
 	}
-
+	phys := b.translate(addr)
 	m.Device.Write32(
-		addr - m.Start,
+		phys - m.Start,
 		value,
 	)
 }

@@ -12,6 +12,7 @@ func main() {
 	romPath := flag.String("rom", "", "Path to the ROM binary image file")
 	ramSize := flag.Uint("ram", 1048576, "RAM size in bytes")
 	cycles := flag.Uint64("cycles", 100000, "Maximum instruction cycles to run")
+	trace := flag.Bool("trace", false, "Enable instruction tracing")
 
 	flag.Parse()
 
@@ -31,6 +32,7 @@ func main() {
 	fmt.Printf("Initializing T23 Machine (RAM: %d bytes, Max Cycles: %d)...\n", *ramSize, *cycles)
 
 	m := machine.New(uint32(*ramSize), romData)
+	m.CPU.Trace = *trace
 
 	fmt.Println("Starting execution...")
 	executedCycles := m.Run(*cycles)
