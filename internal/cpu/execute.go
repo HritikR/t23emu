@@ -46,13 +46,7 @@ func (c *CPU) Execute(inst Instruction) {
 		c.executeCOP0(inst)
 
 	default:
-
-		panic(
-			fmt.Sprintf(
-				"unsupported opcode: %d",
-				inst.Opcode,
-			),
-		)
+		c.Exception(EXC_RI, 0)
 	}
 }
 
@@ -94,14 +88,14 @@ func (c *CPU) executeRType(inst Instruction) {
 	case FUNCT_SLT:
 		c.executeSLT(inst)
 
-	default:
+	case FUNCT_SYSCALL:
+		c.Exception(EXC_SYS, 0)
 
-		panic(
-			fmt.Sprintf(
-				"unsupported R-type funct: %d",
-				inst.Funct,
-			),
-		)
+	case FUNCT_BREAK:
+		c.Exception(EXC_BP, 0)
+
+	default:
+		c.Exception(EXC_RI, 0)
 	}
 }
 
@@ -167,6 +161,11 @@ func (c *CPU) executeLW(inst Instruction) {
 		int32(base) + offset,
 	)
 
+	if !c.Bus.HasMapping(address) {
+		c.Exception(EXC_ADEL, address)
+		return
+	}
+
 	value := c.Bus.Read32(
 		address,
 	)
@@ -193,6 +192,11 @@ func (c *CPU) executeSW(inst Instruction) {
 	address := uint32(
 		int32(base) + offset,
 	)
+
+	if !c.Bus.HasMapping(address) {
+		c.Exception(EXC_ADES, address)
+		return
+	}
 
 	value := c.ReadRegister(
 		inst.Rt,

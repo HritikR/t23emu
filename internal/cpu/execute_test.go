@@ -607,3 +607,160 @@ func TestExecuteERET(t *testing.T) {
 		t.Fatalf("expected Status EXL bit to be cleared, got 0x%08X", cpu.CP0[12])
 	}
 }
+
+func TestExecuteSyscallException(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.PC = 0x00400004
+
+	// Syscall instruction: funct = 12, Opcode = 0
+	inst := Instruction{
+		Opcode: OP_SPECIAL,
+		Funct:  FUNCT_SYSCALL,
+	}
+
+	cpu.Execute(inst)
+
+	// Jump to exception vector
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected PC to be 0x80000180, got 0x%08X", cpu.PC)
+	}
+
+	// ExcCode should be 8 (SYS)
+	excCode := (cpu.CP0[13] >> 2) & 0x1F
+	if excCode != 8 {
+		t.Fatalf("expected ExcCode to be 8, got %d", excCode)
+	}
+
+	// EPC should be 0x00400000 (c.PC - 4)
+	if cpu.CP0[14] != 0x00400000 {
+		t.Fatalf("expected EPC to be 0x00400000, got 0x%08X", cpu.CP0[14])
+	}
+
+	// EXL bit should be set
+	if (cpu.CP0[12] & 0x2) == 0 {
+		t.Fatalf("expected Status EXL bit to be set")
+	}
+}
+
+func TestExecuteBreakpointException(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.PC = 0x00400004
+
+	// Break instruction: funct = 13, Opcode = 0
+	inst := Instruction{
+		Opcode: OP_SPECIAL,
+		Funct:  FUNCT_BREAK,
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected PC to be 0x80000180, got 0x%08X", cpu.PC)
+	}
+
+	excCode := (cpu.CP0[13] >> 2) & 0x1F
+	if excCode != 9 {
+		t.Fatalf("expected ExcCode to be 9, got %d", excCode)
+	}
+}
+
+func TestExecuteRIException(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.PC = 0x00400004
+
+	// Invalid instruction: Opcode = 99 (invalid)
+	inst := Instruction{
+		Opcode: 99,
+	}
+
+	cpu.Execute(inst)
+
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected PC to be 0x80000180, got 0x%08X", cpu.PC)
+	}
+
+	excCode := (cpu.CP0[13] >> 2) & 0x1F
+	if excCode != 10 {
+		t.Fatalf("expected ExcCode to be 10, got %d", excCode)
+	}
+}
+
+func TestExecuteAdEExceptions(t *testing.T) {
+	cpu := createTestCPU() // RAM size is 1024 (0x0 to 0x3FF)
+	cpu.PC = 0x00400004
+
+	// 1. LW Address Error (AdEL)
+	cpu.WriteRegister(1, 0x10000) // Out of bounds base
+	instLw := Instruction{
+		Opcode:    OP_LW,
+		Rs:        1,
+		Rt:        2,
+		Immediate: 0,
+	}
+
+	cpu.Execute(instLw)
+
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected PC to be 0x80000180, got 0x%08X", cpu.PC)
+	}
+
+	excCode := (cpu.CP0[13] >> 2) & 0x1F
+	if excCode != 4 {
+		t.Fatalf("expected ExcCode to be 4 (ADEL), got %d", excCode)
+	}
+
+	if cpu.CP0[8] != 0x10000 {
+		t.Fatalf("expected BadVAddr to be 0x10000, got 0x%08X", cpu.CP0[8])
+	}
+
+	// Reset Status EXL so next exception can capture EPC
+	cpu.CP0[12] &= ^uint32(0x2)
+	cpu.PC = 0x00400004
+
+	// 2. SW Address Error (AdES)
+	cpu.WriteRegister(1, 0x20000)
+	instSw := Instruction{
+		Opcode:    OP_SW,
+		Rs:        1,
+		Rt:        2,
+		Immediate: 0,
+	}
+
+	cpu.Execute(instSw)
+
+	excCodeSw := (cpu.CP0[13] >> 2) & 0x1F
+	if excCodeSw != 5 {
+		t.Fatalf("expected ExcCode to be 5 (ADES), got %d", excCodeSw)
+	}
+
+	if cpu.CP0[8] != 0x20000 {
+		t.Fatalf("expected BadVAddr to be 0x20000, got 0x%08X", cpu.CP0[8])
+	}
+}
+
+func TestStepAddressErrorException(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.PC = 0x99999999 // Completely unmapped fetch PC
+	cpu.Running = true
+
+	cpu.Step()
+
+	// Step should have intercepted unmapped PC, triggered AdEL exception, and PC is now vector
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected PC to jump to exception vector, got 0x%08X", cpu.PC)
+	}
+
+	excCode := (cpu.CP0[13] >> 2) & 0x1F
+	if excCode != 4 {
+		t.Fatalf("expected ExcCode to be 4 (ADEL), got %d", excCode)
+	}
+
+	if cpu.CP0[8] != 0x99999999 {
+		t.Fatalf("expected BadVAddr to hold unmapped fetch address, got 0x%08X", cpu.CP0[8])
+	}
+
+	// EPC should be set to the invalid fetch address
+	if cpu.CP0[14] != 0x99999999 {
+		t.Fatalf("expected EPC to be invalid fetch PC, got 0x%08X", cpu.CP0[14])
+	}
+}

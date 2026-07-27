@@ -45,6 +45,11 @@ func (b *Bus) find(addr uint32) *Mapping {
 	return nil
 }
 
+// HasMapping returns true if the address has a mapped device.
+func (b *Bus) HasMapping(addr uint32) bool {
+	return b.find(addr) != nil
+}
+
 func (b *Bus) Read8(addr uint32) byte {
 
 	m := b.find(addr)

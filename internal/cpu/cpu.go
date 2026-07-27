@@ -87,10 +87,16 @@ func (c *CPU) Fetch() uint32 {
 }
 
 // Step executes one CPU cycle.
-// Execution logic will be added later.
 func (c *CPU) Step() {
 
 	if !c.Running {
+		return
+	}
+
+	// Address Error check for Fetch
+	if !c.Bus.HasMapping(c.PC) {
+		c.Exception(EXC_ADEL, c.PC)
+		c.Cycles++
 		return
 	}
 
@@ -124,4 +130,35 @@ func (c *CPU) Halt(reason HaltReason) {
 	c.Running = false
 
 	c.HaltReason = reason
+}
+
+// Exception handles CPU exception processing: updates Cause, EPC, Status EXL, BadVAddr and jumps to vector.
+func (c *CPU) Exception(code uint8, badVAddr uint32) {
+	if code == EXC_ADEL || code == EXC_ADES {
+		c.CP0[CP0_BADVADDR] = badVAddr
+	}
+
+	// Status register is CP0[12]
+	if (c.CP0[CP0_STATUS] & 0x2) == 0 {
+		// Set EPC CP0[14]. If EXC_ADEL on Fetch, c.PC points to invalid address.
+		// Else inside execution, EPC = c.PC - 4.
+		if code == EXC_ADEL && badVAddr == c.PC {
+			c.CP0[CP0_EPC] = c.PC
+		} else {
+			c.CP0[CP0_EPC] = c.PC - 4
+		}
+		// Set EXL bit (bit 1)
+		c.CP0[CP0_STATUS] |= 0x2
+	}
+
+	// Set Cause ExcCode bits 6:2
+	c.CP0[CP0_CAUSE] = (c.CP0[CP0_CAUSE] & ^uint32(0x7C)) | (uint32(code) << 2)
+
+	// Jump to exception vector
+	// BEV is bit 22 (0x00400000) of Status
+	if (c.CP0[CP0_STATUS] & 0x00400000) != 0 {
+		c.PC = 0xbfc00380
+	} else {
+		c.PC = 0x80000180
+	}
 }

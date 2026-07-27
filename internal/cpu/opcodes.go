@@ -54,4 +54,19 @@ const (
 	FUNCT_NOR uint8 = 39
 
 	FUNCT_SLT uint8 = 42
+
+	// System/exception functions
+	FUNCT_SYSCALL uint8 = 12
+	FUNCT_BREAK   uint8 = 13
+)
+
+// Exception Codes
+const (
+	EXC_INT   uint8 = 0
+	EXC_ADEL  uint8 = 4
+	EXC_ADES  uint8 = 5
+	EXC_SYS   uint8 = 8
+	EXC_BP    uint8 = 9
+	EXC_RI    uint8 = 10
+	EXC_OV    uint8 = 12
 )
