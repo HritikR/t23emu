@@ -8,3 +8,12 @@ const (
 	// ADD immediate
 	OP_ADDI uint8 = 8
 )
+
+const (
+
+	// R-type function codes
+
+	FUNCT_SLL uint8 = 0
+
+	FUNCT_ADD uint8 = 32
+)
