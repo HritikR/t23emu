@@ -7,6 +7,10 @@ const (
 
 	// ADD immediate
 	OP_ADDI uint8 = 8
+
+	// Memory
+	OP_LW uint8 = 35
+	OP_SW uint8 = 43
 )
 
 const (
