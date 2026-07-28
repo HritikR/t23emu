@@ -46,6 +46,11 @@ type RegisterBlock struct {
 	// without giving every peripheral its own device type.
 	readFuncs map[uint32]func() uint32
 
+	// writeFuncs maps a register offset to a side effect run on write. It
+	// covers registers that act rather than store: set/clear aliases onto
+	// another register, and write-one-to-clear controls.
+	writeFuncs map[uint32]func(uint32)
+
 	// readCounts and writeCounts record accesses per offset.
 	readCounts  map[uint32]uint64
 	writeCounts map[uint32]uint64
@@ -66,6 +71,7 @@ func NewRegisterBlock(name string, size uint32) *RegisterBlock {
 		readOnes:    make(map[uint32]uint32),
 		names:       make(map[uint32]string),
 		readFuncs:   make(map[uint32]func() uint32),
+		writeFuncs:  make(map[uint32]func(uint32)),
 		readCounts:  make(map[uint32]uint64),
 		writeCounts: make(map[uint32]uint64),
 		Out:         os.Stderr,
@@ -91,6 +97,14 @@ func (r *RegisterBlock) SetInitial(offset uint32, value uint32) {
 // written to them.
 func (r *RegisterBlock) SetReadFunc(offset uint32, fn func() uint32) {
 	r.readFuncs[offset&^3] = fn
+}
+
+// SetWriteFunc installs a side effect run whenever a register is
+// written, for registers that act on a write rather than simply hold
+// the value. The value is still stored, so the write remains visible in
+// a register dump.
+func (r *RegisterBlock) SetWriteFunc(offset uint32, fn func(uint32)) {
+	r.writeFuncs[offset&^3] = fn
 }
 
 // SetName attaches a symbolic name to a register offset for tracing.
@@ -134,6 +148,10 @@ func (r *RegisterBlock) Write32(addr uint32, value uint32) {
 	r.writeCounts[offset]++
 
 	r.regs[offset] = value
+
+	if fn, ok := r.writeFuncs[offset]; ok {
+		fn(value)
+	}
 
 	if r.Trace {
 		fmt.Fprintf(r.Out, "  %s write %s <= 0x%08x\n", r.Name, r.RegName(offset), value)

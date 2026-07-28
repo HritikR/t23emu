@@ -253,11 +253,17 @@ func TestMachineTimerInterruptWakesWAIT(t *testing.T) {
 	m := New(1024, nil)
 	m.LoadProgram(0, []uint32{0x42000020}) // wait
 	m.CPU.CP0[cpu.CP0_STATUS] = cpu.STATUS_IE | cpu.CAUSE_IP2
-	m.INTC.Write32(device.INTC_IMCR, 1<<3)
+	m.INTC.Write32(device.INTC_IMCR, 1<<OSTIRQ)
 
-	cycles := m.Run(200001)
+	// The tick only exists once software programs a compare value, the
+	// same way the kernel does. Ten OST ticks keeps the test short.
+	const period = 10
+	m.OST.Write32(device.OST_OST1DFR, period-1)
 
-	if cycles != 200001 {
+	maxCycles := period*device.OSTCyclesPerTick + 1
+	cycles := m.Run(maxCycles)
+
+	if cycles != maxCycles {
 		t.Fatalf("expected to run to timer wakeup, got %d cycles", cycles)
 	}
 	if m.CPU.HaltReason != cpu.HaltNone {

@@ -121,6 +121,7 @@ const (
 	CAUSE_CE      uint32 = 0x30000000 // Coprocessor number for a CpU exception
 	CAUSE_IP      uint32 = 0x0000FF00 // Interrupt pending bits, bits 15:8
 	CAUSE_IP2     uint32 = 1 << 10    // Hardware interrupt line 0
+	CAUSE_IP7     uint32 = 1 << 15    // CP0 timer interrupt
 )
 
 const (

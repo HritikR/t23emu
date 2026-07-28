@@ -605,6 +605,46 @@ func TestCP0ConfigAdvertisesConfig1(t *testing.T) {
 	}
 }
 
+func TestCP0CountAdvancesFromCycles(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	ram.Write32(0, 0)
+	ram.Write32(4, 0)
+	cpu.Running = true
+
+	cpu.writeCP0(CP0_COUNT, 0, 100)
+	cpu.Step()
+	cpu.Step()
+
+	if got := cpu.readCP0(CP0_COUNT, 0); got != 101 {
+		t.Fatalf("expected Count to advance to 101, got %d", got)
+	}
+}
+
+func TestCP0CompareRaisesTimerInterrupt(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	ram.Write32(0, 0)
+	cpu.Running = true
+	cpu.CP0[CP0_STATUS] = STATUS_IE | CAUSE_IP7
+	cpu.writeCP0(CP0_COUNT, 0, 0)
+	cpu.writeCP0(CP0_COMPARE, 0, 1)
+
+	cpu.Step()
+	cpu.Step()
+	cpu.Step()
+
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected CP0 timer interrupt vector, got 0x%08X", cpu.PC)
+	}
+	if got := (cpu.CP0[CP0_CAUSE] >> 2) & 0x1F; got != uint32(EXC_INT) {
+		t.Fatalf("expected interrupt exception, got %d", got)
+	}
+
+	cpu.writeCP0(CP0_COMPARE, 0, 10)
+	if cpu.CP0[CP0_CAUSE]&CAUSE_IP7 != 0 {
+		t.Fatalf("writing Compare should clear IP7, Cause=0x%08X", cpu.CP0[CP0_CAUSE])
+	}
+}
+
 func TestStepTakesExternalInterrupt(t *testing.T) {
 	cpu, ram := createCPUWithRAM()
 	ram.Write32(0, 0)
@@ -696,14 +736,38 @@ func TestWAITStopsFetchUntilEnabledInterrupt(t *testing.T) {
 	cpu.InterruptPending = func() uint32 { return CAUSE_IP2 }
 	cpu.Step()
 
-	if !cpu.Waiting {
-		t.Fatalf("pending interrupt with IE clear should not leave WAIT state")
+	if cpu.Waiting {
+		t.Fatalf("pending interrupt should wake WAIT even when IE is clear")
 	}
 	if cpu.ReadRegister(8) != 0 {
-		t.Fatalf("WAIT fetched the following instruction while interrupts were disabled")
+		t.Fatalf("WAIT should wake before fetching the following instruction")
+	}
+	if cpu.PC != 4 {
+		t.Fatalf("expected PC to remain at instruction after WAIT, got 0x%08X", cpu.PC)
 	}
 
+	cpu.InterruptPending = func() uint32 { return 0 }
+	cpu.Step()
+
+	if cpu.ReadRegister(8) != 1 {
+		t.Fatalf("expected execution to resume after WAIT, got r8=0x%08X", cpu.ReadRegister(8))
+	}
+	if cpu.PC != 8 {
+		t.Fatalf("expected PC after resumed instruction to be 0x00000008, got 0x%08X", cpu.PC)
+	}
+}
+
+func TestWAITTakesEnabledInterrupt(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	ram.Write32(0, 0x42000020) // wait
+	cpu.PC = 0
+	cpu.NextPC = 4
 	cpu.CP0[CP0_STATUS] = STATUS_IE | CAUSE_IP2
+	cpu.Running = true
+
+	cpu.Step()
+
+	cpu.InterruptPending = func() uint32 { return CAUSE_IP2 }
 	cpu.Step()
 
 	if cpu.Waiting {
@@ -714,6 +778,35 @@ func TestWAITStopsFetchUntilEnabledInterrupt(t *testing.T) {
 	}
 	if cpu.CP0[CP0_EPC] != 4 {
 		t.Fatalf("expected EPC at instruction after WAIT, got 0x%08X", cpu.CP0[CP0_EPC])
+	}
+}
+
+func TestWAITWakesWithoutDeliverableInterrupt(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	ram.Write32(0, 0x42000020) // wait
+	ram.Write32(4, 0x24080001) // addiu t0, zero, 1
+	cpu.PC = 0
+	cpu.NextPC = 4
+	cpu.Running = true
+
+	cpu.Step()
+	if !cpu.Waiting {
+		t.Fatalf("expected CPU to enter WAIT state")
+	}
+
+	cpu.WakePending = func() bool { return true }
+	cpu.Step()
+
+	if cpu.Waiting {
+		t.Fatalf("expected wake event to leave WAIT state")
+	}
+	if cpu.CP0[CP0_CAUSE]&CAUSE_IP != 0 {
+		t.Fatalf("wake event should not force Cause.IP bits, got 0x%08X", cpu.CP0[CP0_CAUSE])
+	}
+
+	cpu.Step()
+	if cpu.ReadRegister(8) != 1 {
+		t.Fatalf("expected execution to resume after wake, got r8=0x%08X", cpu.ReadRegister(8))
 	}
 }
 

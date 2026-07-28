@@ -49,7 +49,7 @@ func main() {
 		"CPM":    m.CPM,
 		"INTC":   m.INTC.RegisterBlock,
 		"TCU":    m.TCU,
-		"OST":    m.OST,
+		"OST":    m.OST.RegisterBlock,
 		"GPIO":   m.GPIO,
 		"DDRC":   m.DDRC,
 		"DDRP":   m.DDRP,

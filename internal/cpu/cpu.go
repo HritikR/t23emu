@@ -52,7 +52,7 @@ type CPU struct {
 	Running bool
 
 	// Waiting reports that WAIT has stopped instruction fetch until an
-	// enabled interrupt is taken.
+	// interrupt or implementation-specific wake event resumes the core.
 	Waiting bool
 
 	// CPU halt status
@@ -71,12 +71,21 @@ type CPU struct {
 	// Coprocessor 0 registers
 	CP0 [32]uint32
 
+	// CP0 Count is derived from Cycles, but writes reset the visible base.
+	countBaseCycle uint64
+	countBaseValue uint32
+	compareSet     bool
+
 	// TLB contains the CP0-managed virtual mappings used by kuseg/kseg2.
 	TLB [32]TLBEntry
 
 	// InterruptPending returns CP0 Cause.IP bits currently asserted by
 	// external interrupt hardware.
 	InterruptPending func() uint32
+
+	// WakePending reports implementation-specific activity that can resume
+	// the core from WAIT without necessarily being a deliverable interrupt.
+	WakePending func() bool
 
 	// LLBit is the load-linked bit set by LL and tested by SC.
 	LLBit bool
@@ -137,6 +146,9 @@ func (c *CPU) Reset() {
 	// the cache/TLB geometry from CP0 Config select 1.
 	c.CP0[CP0_CONFIG] = CONFIG_M | CONFIG_K0
 	c.CP0[CP0_RANDOM] = 31
+	c.countBaseCycle = 0
+	c.countBaseValue = 0
+	c.compareSet = false
 
 	// After reset a MIPS core starts in kernel mode with BEV set and the
 	// error level flag asserted, so exceptions use the ROM vectors.
@@ -193,7 +205,12 @@ func (c *CPU) Step() {
 	}
 
 	if c.Waiting {
-		if c.checkInterrupts() {
+		if pending := c.updateInterruptPending(); pending != 0 {
+			c.Waiting = false
+			if c.interruptEnabled(pending) {
+				c.takeInterrupt()
+			}
+		} else if c.WakePending != nil && c.WakePending() {
 			c.Waiting = false
 		}
 		c.Cycles++
@@ -240,13 +257,29 @@ func (c *CPU) Step() {
 }
 
 func (c *CPU) checkInterrupts() bool {
+	pending := c.updateInterruptPending()
+	if !c.interruptEnabled(pending) {
+		return false
+	}
+
+	c.takeInterrupt()
+	return true
+}
+
+func (c *CPU) updateInterruptPending() uint32 {
 	pending := uint32(0)
 	if c.InterruptPending != nil {
 		pending = c.InterruptPending() & CAUSE_IP
 	}
+	if c.cp0TimerPending() {
+		pending |= CAUSE_IP7
+	}
 
 	c.CP0[CP0_CAUSE] = (c.CP0[CP0_CAUSE] & ^CAUSE_IP) | pending
+	return pending
+}
 
+func (c *CPU) interruptEnabled(pending uint32) bool {
 	status := c.CP0[CP0_STATUS]
 	if status&STATUS_IE == 0 || status&(STATUS_EXL|STATUS_ERL) != 0 {
 		return false
@@ -254,11 +287,24 @@ func (c *CPU) checkInterrupts() bool {
 	if pending&status&STATUS_IM == 0 {
 		return false
 	}
+	return true
+}
 
+func (c *CPU) takeInterrupt() {
 	c.CurrentPC = c.PC
 	c.InDelaySlot = false
 	c.Exception(EXC_INT, 0)
-	return true
+}
+
+func (c *CPU) cp0Count() uint32 {
+	return c.countBaseValue + uint32((c.Cycles-c.countBaseCycle)/2)
+}
+
+func (c *CPU) cp0TimerPending() bool {
+	if !c.compareSet {
+		return false
+	}
+	return int32(c.cp0Count()-c.CP0[CP0_COMPARE]) >= 0
 }
 
 // Run executes the CPU loop.

@@ -30,6 +30,11 @@ const (
 	OSTStart uint32 = 0x12000000
 	OSTEnd   uint32 = 0x12000FFF
 
+	// OSTIRQ is the interrupt line the OS timer drives. The kernel
+	// confirms it: the only bit it ever touches in the INTC mask
+	// registers is bit 3.
+	OSTIRQ uint8 = 3
+
 	GPIOStart uint32 = 0x10010000
 	GPIOEnd   uint32 = 0x1001FFFF
 
@@ -120,8 +125,8 @@ type Machine struct {
 	// TCU is the watchdog, timer/counter and OS timer block.
 	TCU *device.RegisterBlock
 
-	// OST is the Linux OS timer clocksource block.
-	OST *device.RegisterBlock
+	// OST is the Linux OS timer clocksource and tick block.
+	OST *device.OST
 
 	// GPIO is the pin multiplexing and direction block.
 	GPIO *device.RegisterBlock
@@ -260,16 +265,27 @@ func New(ramSize uint32, romData []byte) *Machine {
 	c := cpu.New(b)
 
 	cpuCycles = func() uint64 { return c.Cycles }
-	nextTimerIRQ := uint64(200000)
-	c.InterruptPending = func() uint32 {
-		if c.Cycles >= nextTimerIRQ {
-			intc.Assert(3)
-			nextTimerIRQ = c.Cycles + 200000
+
+	// The periodic tick comes from the OST compare the kernel programmed,
+	// not from a fixed cycle count. Driving it from the device keeps the
+	// interrupt and the OSTFR flag the handler dispatches on in step: a
+	// tick raised here that the handler cannot then see in OSTFR advances
+	// nothing, and jiffies stay frozen.
+	assertTimer := func() {
+		if ost.OST1Expired() {
+			intc.Assert(OSTIRQ)
 		}
+	}
+	c.InterruptPending = func() uint32 {
+		assertTimer()
 		if intc.Pending() != 0 {
 			return cpu.CAUSE_IP2
 		}
 		return 0
+	}
+	c.WakePending = func() bool {
+		assertTimer()
+		return intc.RawPending() != 0
 	}
 
 	if len(romData) > 0 {

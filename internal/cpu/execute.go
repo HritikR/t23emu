@@ -1178,6 +1178,8 @@ func (c *CPU) executeMTC0(inst Instruction) {
 
 func (c *CPU) readCP0(rd uint8, sel uint32) uint32 {
 	switch rd {
+	case CP0_COUNT:
+		return c.cp0Count()
 	case CP0_CONFIG:
 		if sel == 1 {
 			return CP0_CONFIG1_RESET
@@ -1188,6 +1190,16 @@ func (c *CPU) readCP0(rd uint8, sel uint32) uint32 {
 
 func (c *CPU) writeCP0(rd uint8, sel uint32, value uint32) {
 	switch rd {
+	case CP0_COUNT:
+		c.countBaseValue = value
+		c.countBaseCycle = c.Cycles
+		c.CP0[CP0_COUNT] = value
+		return
+	case CP0_COMPARE:
+		c.CP0[CP0_COMPARE] = value
+		c.compareSet = true
+		c.CP0[CP0_CAUSE] &^= CAUSE_IP7
+		return
 	case CP0_CONFIG:
 		if sel != 0 {
 			return

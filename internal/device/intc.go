@@ -92,4 +92,8 @@ func (i *INTC) Pending() uint32 {
 	return i.pending &^ i.mask
 }
 
+func (i *INTC) RawPending() uint32 {
+	return i.pending
+}
+
 var _ Device = (*INTC)(nil)
