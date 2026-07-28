@@ -113,3 +113,7 @@ the commit history.
 - [ ] model real TCU/OST compare interrupt timing
 - [ ] model more peripherals instead of generic register stubs
 - [ ] clean up legacy CPU tests
+
+## license
+
+This project is licensed under the MIT License - see the [LICENSE](/LICENSE) file for details.
