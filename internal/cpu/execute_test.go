@@ -634,7 +634,14 @@ func TestExternalInterruptWaitsForBranchDelaySlot(t *testing.T) {
 	cpu.PC = 0
 	cpu.NextPC = 4
 	cpu.CP0[CP0_STATUS] = STATUS_IE | CAUSE_IP2
-	cpu.InterruptPending = func() uint32 { return CAUSE_IP2 }
+	checks := 0
+	cpu.InterruptPending = func() uint32 {
+		checks++
+		if checks >= 2 {
+			return CAUSE_IP2
+		}
+		return 0
+	}
 	cpu.Running = true
 
 	cpu.Step()
@@ -651,6 +658,9 @@ func TestExternalInterruptWaitsForBranchDelaySlot(t *testing.T) {
 	}
 	if cpu.CP0[CP0_EPC] != 8 {
 		t.Fatalf("expected EPC at branch target, got 0x%08X", cpu.CP0[CP0_EPC])
+	}
+	if cpu.CP0[CP0_CAUSE]&CAUSE_BD != 0 {
+		t.Fatalf("expected interrupt after delay slot to leave BD clear, got Cause 0x%08X", cpu.CP0[CP0_CAUSE])
 	}
 }
 

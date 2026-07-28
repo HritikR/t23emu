@@ -235,6 +235,7 @@ func (c *CPU) checkInterrupts() bool {
 	}
 
 	c.CurrentPC = c.PC
+	c.InDelaySlot = false
 	c.Exception(EXC_INT, 0)
 	return true
 }
