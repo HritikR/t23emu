@@ -219,12 +219,16 @@ func (s *SFC) commandReply(command byte) []byte {
 	case 0x05, 0x35:
 		// Read status registers. Keep WIP/WEL clear so polls complete.
 		return []byte{0x00}
+
 	case 0x90:
-		// Read manufacturer/device ID.
-		return []byte{0xef, 0x16}
+		// Read manufacturer/device ID (REMS).
+		// P25Q64H: manufacturer 0x85, device ID 0x16.
+		return []byte{0x85, 0x16}
+
 	case 0x9f:
-		// JEDEC RDID for a Winbond W25Q64-class 8 MiB SPI NOR.
-		return []byte{0xef, 0x40, 0x17}
+		// JEDEC RDID for Puya P25Q64H 8 MiB SPI NOR.
+		return []byte{0x85, 0x60, 0x17}
+
 	default:
 		return nil
 	}
