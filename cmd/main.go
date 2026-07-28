@@ -14,7 +14,7 @@ import (
 func main() {
 	romPath := flag.String("rom", "", "Path to the ROM binary image file")
 	ramSize := flag.Uint("ram", 64*1024*1024, "RAM size in bytes")
-	cycles := flag.Uint64("cycles", 1000000, "Maximum instruction cycles to run")
+	cycles := flag.Uint64("cycles", 1500000000, "Maximum instruction cycles to run")
 	trace := flag.Bool("trace", false, "Enable instruction tracing to stderr")
 	traceMMIO := flag.Bool("trace-mmio", false, "Trace peripheral register accesses to stderr")
 	traceFrom := flag.Uint64("trace-from", 0, "Begin instruction tracing at this cycle")
@@ -44,6 +44,22 @@ func main() {
 			port.SetOutput(io.Discard)
 		}
 	}
+
+	// Redirect standard input to the UARTs
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if n > 0 {
+				for _, port := range m.UARTs {
+					port.Feed(buf[:n])
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
 
 	blocks := map[string]*device.RegisterBlock{
 		"CPM":    m.CPM,

@@ -42,13 +42,13 @@ func TestUARTWriteAndCapture(t *testing.T) {
 func TestUARTStatusRegister(t *testing.T) {
 	uart := NewUART(nil)
 
-	// Reading offset 4 (status register) should return 0x60 (ready to TX)
-	status := uart.Read8(4)
+	// Reading offset 0x14 (status register) should return 0x60 (ready to TX)
+	status := uart.Read8(0x14)
 	if status != 0x60 {
 		t.Fatalf("expected status 0x60, got 0x%02X", status)
 	}
 
-	status32 := uart.Read32(4)
+	status32 := uart.Read32(0x14)
 	if status32 != 0x60 {
 		t.Fatalf("expected 32-bit status 0x60, got 0x%08X", status32)
 	}
