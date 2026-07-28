@@ -1,6 +1,4 @@
 APP := t23emu
-SHELL := cmd.exe
-.SHELLFLAGS := /C
 
 ROM ?= firmware_dump.bin
 RAM ?= 67108864
@@ -8,15 +6,26 @@ CYCLES ?= 200000000
 UART_LIMIT ?= 4096
 
 BIN_DIR := bin
-EMU := $(BIN_DIR)/$(APP).exe
-IMGSCAN := $(BIN_DIR)/imgscan.exe
+
+ifeq ($(OS),Windows_NT)
+	EXE := .exe
+	RM := rmdir /S /Q
+	MKDIR := mkdir
+else
+	EXE :=
+	RM := rm -rf
+	MKDIR := mkdir -p
+endif
+
+EMU := $(BIN_DIR)/$(APP)$(EXE)
+IMGSCAN := $(BIN_DIR)/imgscan$(EXE)
 
 .PHONY: all build imgscan test run run-mmio clean
 
 all: build imgscan
 
 $(BIN_DIR):
-	powershell -NoProfile -Command "New-Item -ItemType Directory -Force '$(BIN_DIR)' | Out-Null"
+	$(MKDIR) $(BIN_DIR)
 
 build: $(BIN_DIR)
 	go build -o $(EMU) ./cmd/main.go
@@ -34,4 +43,8 @@ run-mmio: build
 	$(EMU) -rom $(ROM) -ram $(RAM) -cycles $(CYCLES) -trace-mmio -live-uart=false -uart-limit $(UART_LIMIT)
 
 clean:
-	powershell -NoProfile -Command "Remove-Item -Recurse -Force '$(BIN_DIR)' -ErrorAction SilentlyContinue"
+ifeq ($(OS),Windows_NT)
+	-$(RM) $(BIN_DIR)
+else
+	$(RM) $(BIN_DIR)
+endif
