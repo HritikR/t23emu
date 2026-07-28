@@ -3,7 +3,8 @@ package bus
 import "github.com/HritikR/t23emu/internal/device"
 
 type Bus struct {
-	mappings []Mapping
+	mappings  []Mapping
+	translate func(uint32) (uint32, bool)
 }
 
 func New() *Bus {
@@ -29,17 +30,31 @@ func (b *Bus) Map(
 	)
 }
 
-func (b *Bus) translate(addr uint32) uint32 {
+func (b *Bus) SetTranslator(translate func(uint32) (uint32, bool)) {
+	b.translate = translate
+}
+
+func fixedTranslate(addr uint32) (uint32, bool) {
 	// kseg0 (0x80000000 - 0x9FFFFFFF) and kseg1 (0xA0000000 - 0xBFFFFFFF)
 	// map directly to physical memory starting at 0x00000000 (clear top 3 bits)
 	if addr >= 0x80000000 && addr < 0xC0000000 {
-		return addr & 0x1FFFFFFF
+		return addr & 0x1FFFFFFF, true
 	}
-	return addr
+	return addr, true
+}
+
+func (b *Bus) translateAddr(addr uint32) (uint32, bool) {
+	if b.translate != nil {
+		return b.translate(addr)
+	}
+	return fixedTranslate(addr)
 }
 
 func (b *Bus) find(addr uint32) *Mapping {
-	phys := b.translate(addr)
+	phys, ok := b.translateAddr(addr)
+	if !ok {
+		return nil
+	}
 	for i := range b.mappings {
 		m := &b.mappings[i]
 		if phys >= m.Start && phys <= m.End {
@@ -59,7 +74,7 @@ func (b *Bus) Read8(addr uint32) byte {
 	if m == nil {
 		panic("bus: unmapped read8")
 	}
-	phys := b.translate(addr)
+	phys, _ := b.translateAddr(addr)
 	return m.Device.Read8(phys - m.Start)
 }
 
@@ -71,9 +86,9 @@ func (b *Bus) Write8(
 	if m == nil {
 		panic("bus: unmapped write8")
 	}
-	phys := b.translate(addr)
+	phys, _ := b.translateAddr(addr)
 	m.Device.Write8(
-		phys - m.Start,
+		phys-m.Start,
 		value,
 	)
 }
@@ -83,7 +98,7 @@ func (b *Bus) Read32(addr uint32) uint32 {
 	if m == nil {
 		panic("bus: unmapped read32")
 	}
-	phys := b.translate(addr)
+	phys, _ := b.translateAddr(addr)
 	return m.Device.Read32(phys - m.Start)
 }
 
@@ -95,9 +110,9 @@ func (b *Bus) Write32(
 	if m == nil {
 		panic("bus: unmapped write32")
 	}
-	phys := b.translate(addr)
+	phys, _ := b.translateAddr(addr)
 	m.Device.Write32(
-		phys - m.Start,
+		phys-m.Start,
 		value,
 	)
 }
@@ -119,4 +134,3 @@ func (b *Bus) Write16(
 	b.Write8(addr, byte(value))
 	b.Write8(addr+1, byte(value>>8))
 }
-

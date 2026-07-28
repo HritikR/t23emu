@@ -67,6 +67,9 @@ type CPU struct {
 	// Coprocessor 0 registers
 	CP0 [32]uint32
 
+	// TLB contains the CP0-managed virtual mappings used by kuseg/kseg2.
+	TLB [32]TLBEntry
+
 	// InterruptPending returns CP0 Cause.IP bits currently asserted by
 	// external interrupt hardware.
 	InterruptPending func() uint32
@@ -101,6 +104,7 @@ func New(b *bus.Bus) *CPU {
 	}
 
 	cpu.Reset()
+	b.SetTranslator(cpu.TranslateAddress)
 
 	return cpu
 }
@@ -117,6 +121,9 @@ func (c *CPU) Reset() {
 	for i := range c.CP0 {
 		c.CP0[i] = 0
 	}
+	for i := range c.TLB {
+		c.TLB[i] = TLBEntry{}
+	}
 
 	// Initialize Processor Identification (PRId) register at index 15
 	// A standard MIPS32 processor value.
@@ -125,6 +132,7 @@ func (c *CPU) Reset() {
 	// Advertise Config1 through Config.M. Linux checks this before reading
 	// the cache/TLB geometry from CP0 Config select 1.
 	c.CP0[CP0_CONFIG] = CONFIG_M | CONFIG_K0
+	c.CP0[CP0_RANDOM] = 31
 
 	// After reset a MIPS core starts in kernel mode with BEV set and the
 	// error level flag asserted, so exceptions use the ROM vectors.
@@ -296,18 +304,22 @@ func (c *CPU) Exception(code uint8, badVAddr uint32) {
 		// rather than letting the core spin on the vector address.
 		c.HaltWith(HaltExceptionStorm,
 			"%d consecutive exceptions (last: %s at 0x%08X, vector 0x%08X unhandled)",
-			c.exceptionRun, ExceptionName(code), c.CurrentPC, c.exceptionVector())
+			c.exceptionRun, ExceptionName(code), c.CurrentPC, c.exceptionVector(code, false))
 		return
 	}
 
-	if code == EXC_ADEL || code == EXC_ADES {
+	status := c.CP0[CP0_STATUS]
+	refill := (code == EXC_TLBL || code == EXC_TLBS) && status&STATUS_EXL == 0
+
+	if code == EXC_ADEL || code == EXC_ADES || code == EXC_TLBL || code == EXC_TLBS {
 		c.CP0[CP0_BADVADDR] = badVAddr
+		c.CP0[CP0_ENTRYHI] = (c.CP0[CP0_ENTRYHI] & entryHiASID) | (badVAddr & entryHiVPN)
 	}
 
 	// EPC and the BD flag are only meaningful for the outermost
 	// exception; a fault taken with EXL already set must not clobber the
 	// original return address.
-	if (c.CP0[CP0_STATUS] & STATUS_EXL) == 0 {
+	if status&STATUS_EXL == 0 {
 
 		if c.InDelaySlot {
 			// A delay slot cannot be restarted on its own, so EPC points
@@ -325,7 +337,7 @@ func (c *CPU) Exception(code uint8, badVAddr uint32) {
 	// Set Cause ExcCode bits 6:2
 	c.CP0[CP0_CAUSE] = (c.CP0[CP0_CAUSE] & ^CAUSE_EXCCODE) | (uint32(code) << 2)
 
-	vector := c.exceptionVector()
+	vector := c.exceptionVector(code, refill)
 
 	c.PC = vector
 	c.NextPC = vector + 4
@@ -337,9 +349,12 @@ func (c *CPU) Exception(code uint8, badVAddr uint32) {
 
 // exceptionVector returns the general exception vector address selected
 // by the BEV bit in Status.
-func (c *CPU) exceptionVector() uint32 {
+func (c *CPU) exceptionVector(code uint8, refill bool) uint32 {
 	if (c.CP0[CP0_STATUS] & STATUS_BEV) != 0 {
 		return 0xbfc00380
+	}
+	if refill {
+		return 0x80000000
 	}
 	return 0x80000180
 }

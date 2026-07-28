@@ -892,6 +892,10 @@ func (c *CPU) checkLoad(addr uint32, align uint32) bool {
 		return false
 	}
 	if !c.Bus.HasMapping(addr) {
+		if isTLBMappedSegment(addr) {
+			c.Exception(EXC_TLBL, addr)
+			return false
+		}
 		c.Exception(EXC_ADEL, addr)
 		return false
 	}
@@ -905,6 +909,10 @@ func (c *CPU) checkStore(addr uint32, align uint32) bool {
 		return false
 	}
 	if !c.Bus.HasMapping(addr) {
+		if isTLBMappedSegment(addr) {
+			c.Exception(EXC_TLBS, addr)
+			return false
+		}
 		c.Exception(EXC_ADES, addr)
 		return false
 	}
@@ -1138,9 +1146,17 @@ func (c *CPU) executeCOP0(inst Instruction) {
 			// With no interrupt sources wired up, waiting forever would
 			// hang silently. Halting says so instead.
 			c.HaltWith(HaltStopped, "wait instruction at 0x%08X with no interrupt source", c.CurrentPC)
-		case COP0CO_TLBR, COP0CO_TLBWI, COP0CO_TLBWR, COP0CO_TLBP:
-			// Addresses are translated by fixed segment mapping, so TLB
-			// maintenance has no effect.
+		case COP0CO_TLBR:
+			c.readIndexedTLB(int(c.CP0[CP0_INDEX] & 31))
+			c.retire()
+		case COP0CO_TLBWI:
+			c.writeIndexedTLB(int(c.CP0[CP0_INDEX] & 31))
+			c.retire()
+		case COP0CO_TLBWR:
+			c.writeIndexedTLB(c.randomTLBIndex())
+			c.retire()
+		case COP0CO_TLBP:
+			c.probeTLB()
 			c.retire()
 		default:
 			c.Exception(EXC_RI, 0)

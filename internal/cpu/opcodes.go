@@ -75,6 +75,7 @@ const (
 // Coprocessor 0 register indices
 const (
 	CP0_INDEX    uint8 = 0
+	CP0_RANDOM   uint8 = 1
 	CP0_ENTRYLO0 uint8 = 2
 	CP0_ENTRYLO1 uint8 = 3
 	CP0_CONTEXT  uint8 = 4
@@ -126,13 +127,13 @@ const (
 
 	// R-type function codes (SPECIAL)
 
-	FUNCT_SLL  uint8 = 0
+	FUNCT_SLL   uint8 = 0
 	FUNCT_MOVCI uint8 = 1
-	FUNCT_SRL  uint8 = 2
-	FUNCT_SRA  uint8 = 3
-	FUNCT_SLLV uint8 = 4
-	FUNCT_SRLV uint8 = 6
-	FUNCT_SRAV uint8 = 7
+	FUNCT_SRL   uint8 = 2
+	FUNCT_SRA   uint8 = 3
+	FUNCT_SLLV  uint8 = 4
+	FUNCT_SRLV  uint8 = 6
+	FUNCT_SRAV  uint8 = 7
 
 	FUNCT_JR   uint8 = 8
 	FUNCT_JALR uint8 = 9
@@ -191,10 +192,10 @@ const (
 
 // SPECIAL3 function codes
 const (
-	FUNCT3_EXT    uint8 = 0
-	FUNCT3_INS    uint8 = 4
-	FUNCT3_BSHFL  uint8 = 32
-	FUNCT3_RDHWR  uint8 = 59
+	FUNCT3_EXT   uint8 = 0
+	FUNCT3_INS   uint8 = 4
+	FUNCT3_BSHFL uint8 = 32
+	FUNCT3_RDHWR uint8 = 59
 )
 
 // BSHFL sub-operations, held in the Shamt field of a SPECIAL3 BSHFL instruction.

@@ -194,3 +194,75 @@ func TestCPUStop(t *testing.T) {
 		)
 	}
 }
+
+func TestTLBTranslatesKseg2Address(t *testing.T) {
+	ram := memory.NewRAM(0x2000)
+	b := bus.New()
+	b.Map(0, 0x1FFF, ram)
+
+	cpu := New(b)
+	cpu.CP0[CP0_INDEX] = 0
+	cpu.CP0[CP0_ENTRYHI] = 0xC0000000
+	cpu.CP0[CP0_ENTRYLO0] = entryLoV | entryLoD | entryLoG
+	cpu.CP0[CP0_ENTRYLO1] = (1 << 6) | entryLoV | entryLoD | entryLoG
+	cpu.writeIndexedTLB(0)
+
+	b.Write32(0xC0000000, 0x12345678)
+	if got := ram.Read32(0); got != 0x12345678 {
+		t.Fatalf("expected TLB store to physical 0, got 0x%08X", got)
+	}
+
+	ram.Write32(0x1000, 0x89ABCDEF)
+	if got := b.Read32(0xC0001000); got != 0x89ABCDEF {
+		t.Fatalf("expected odd TLB page read from physical 0x1000, got 0x%08X", got)
+	}
+}
+
+func TestCOP0TLBProbeAndRead(t *testing.T) {
+	cpu := createTestCPU()
+
+	cpu.CP0[CP0_INDEX] = 3
+	cpu.CP0[CP0_PAGEMASK] = 0
+	cpu.CP0[CP0_ENTRYHI] = 0xC0000000
+	cpu.CP0[CP0_ENTRYLO0] = entryLoV | entryLoD | entryLoG
+	cpu.CP0[CP0_ENTRYLO1] = (1 << 6) | entryLoV | entryLoD | entryLoG
+	cpu.Execute(Instruction{Opcode: OP_COP0, Rs: COP0_CO, Funct: COP0CO_TLBWI})
+
+	cpu.CP0[CP0_ENTRYHI] = 0xC0000123
+	cpu.Execute(Instruction{Opcode: OP_COP0, Rs: COP0_CO, Funct: COP0CO_TLBP})
+	if cpu.CP0[CP0_INDEX] != 3 {
+		t.Fatalf("expected TLBP to find index 3, got 0x%08X", cpu.CP0[CP0_INDEX])
+	}
+
+	cpu.CP0[CP0_ENTRYHI] = 0
+	cpu.CP0[CP0_ENTRYLO0] = 0
+	cpu.CP0[CP0_ENTRYLO1] = 0
+	cpu.Execute(Instruction{Opcode: OP_COP0, Rs: COP0_CO, Funct: COP0CO_TLBR})
+	if cpu.CP0[CP0_ENTRYHI]&entryHiVPN != 0xC0000000 {
+		t.Fatalf("expected TLBR to restore EntryHi, got 0x%08X", cpu.CP0[CP0_ENTRYHI])
+	}
+	if cpu.CP0[CP0_ENTRYLO0]&entryLoV == 0 {
+		t.Fatalf("expected TLBR to restore valid EntryLo0, got 0x%08X", cpu.CP0[CP0_ENTRYLO0])
+	}
+}
+
+func TestKseg2StoreMissRaisesTLBSRefill(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.CP0[CP0_STATUS] = 0
+	cpu.PC = 0x80020000
+	cpu.CurrentPC = cpu.PC
+	cpu.WriteRegister(1, 0xC0000000)
+	cpu.WriteRegister(2, 0x12345678)
+
+	cpu.Execute(Instruction{Opcode: OP_SW, Rs: 1, Rt: 2})
+
+	if got := (cpu.CP0[CP0_CAUSE] >> 2) & 0x1F; got != uint32(EXC_TLBS) {
+		t.Fatalf("expected TLBS, got %d", got)
+	}
+	if cpu.CP0[CP0_BADVADDR] != 0xC0000000 {
+		t.Fatalf("expected BadVAddr c0000000, got 0x%08X", cpu.CP0[CP0_BADVADDR])
+	}
+	if cpu.PC != 0x80000000 {
+		t.Fatalf("expected TLB refill vector 0x80000000, got 0x%08X", cpu.PC)
+	}
+}
