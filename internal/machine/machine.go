@@ -306,7 +306,10 @@ func New(ramSize uint32, romData []byte) *Machine {
 		if isIngenicSPL {
 			// The boot ROM hands control over with a stack below the
 			// image and a return address pointing back into itself.
-			c.WriteRegister(29, 0x80000000+SPLLoadAddress+uint32(len(romData))+0x4000)
+			// The stack pointer must be 8-byte aligned per the MIPS ABI.
+			sp := 0x80000000 + SPLLoadAddress + uint32(len(romData)) + 0x4000
+			sp = sp &^ 7
+			c.WriteRegister(29, sp)
 			c.WriteRegister(31, BootROMReturn)
 		}
 	}
