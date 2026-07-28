@@ -46,6 +46,11 @@ const (
 	UARTCount  int    = 3
 	UARTEnd    uint32 = 0x1003FFFF
 
+	// I2C0Start is the hardware I2C controller. Bus 1 on this board is
+	// bit-banged over GPIO instead and needs no block of its own.
+	I2C0Start uint32 = 0x10050000
+	I2C0End   uint32 = 0x10050FFF
+
 	// DDRCStart covers the DDR controller and PHY, which the SPL programs
 	// before it can relocate anything into external memory.
 	DDRCStart uint32 = 0x13010000
@@ -130,6 +135,9 @@ type Machine struct {
 
 	// GPIO is the pin multiplexing and direction block.
 	GPIO *device.RegisterBlock
+
+	// I2C0 is the hardware I2C controller.
+	I2C0 *device.RegisterBlock
 
 	// DDRC is the DDR memory controller block.
 	DDRC *device.RegisterBlock
@@ -221,6 +229,9 @@ func New(ramSize uint32, romData []byte) *Machine {
 	}
 	uart := uarts[0]
 
+	i2c0 := device.NewI2C("I2C0")
+	b.Map(I2C0Start, I2C0End, i2c0)
+
 	ddrc := device.NewDDRC()
 	b.Map(DDRCStart, DDRCEnd, ddrc)
 
@@ -311,6 +322,7 @@ func New(ramSize uint32, romData []byte) *Machine {
 		TCU:           tcu,
 		OST:           ost,
 		GPIO:          gpio,
+		I2C0:          i2c0,
 		DDRC:          ddrc,
 		DDRP:          ddrp,
 		SFC:           sfc,
