@@ -22,6 +22,7 @@ The emulator currently gets through:
 - early timer interrupts
 - early CP0 TLB mapped-space handling
 - CPU `wait` wakeup on interrupt
+- 8-byte MIPS ABI stack alignment for Ingenic SPLs
 
 The current known boot limit is after early Linux device init. It has not yet
 booted fully to a userspace shell.
@@ -116,4 +117,4 @@ the commit history.
 
 ## license
 
-This project is licensed under the MIT License - see the [LICENSE](/LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
