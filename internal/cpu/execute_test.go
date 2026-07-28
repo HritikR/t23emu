@@ -664,6 +664,59 @@ func TestExternalInterruptWaitsForBranchDelaySlot(t *testing.T) {
 	}
 }
 
+func TestWAITStopsFetchUntilEnabledInterrupt(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	ram.Write32(0, 0x42000020) // wait
+	ram.Write32(4, EncodeI(OP_ADDI, 0, 8, 1))
+	cpu.PC = 0
+	cpu.NextPC = 4
+	cpu.Running = true
+
+	cpu.Step()
+
+	if !cpu.Waiting {
+		t.Fatalf("expected CPU to enter WAIT state")
+	}
+	if !cpu.Running {
+		t.Fatalf("WAIT should not halt the CPU")
+	}
+	if cpu.PC != 4 {
+		t.Fatalf("expected PC after WAIT to be 0x00000004, got 0x%08X", cpu.PC)
+	}
+
+	cpu.Step()
+
+	if cpu.ReadRegister(8) != 0 {
+		t.Fatalf("WAIT fetched the following instruction without an interrupt")
+	}
+	if cpu.PC != 4 {
+		t.Fatalf("expected PC to remain at 0x00000004 while waiting, got 0x%08X", cpu.PC)
+	}
+
+	cpu.InterruptPending = func() uint32 { return CAUSE_IP2 }
+	cpu.Step()
+
+	if !cpu.Waiting {
+		t.Fatalf("pending interrupt with IE clear should not leave WAIT state")
+	}
+	if cpu.ReadRegister(8) != 0 {
+		t.Fatalf("WAIT fetched the following instruction while interrupts were disabled")
+	}
+
+	cpu.CP0[CP0_STATUS] = STATUS_IE | CAUSE_IP2
+	cpu.Step()
+
+	if cpu.Waiting {
+		t.Fatalf("expected interrupt to leave WAIT state")
+	}
+	if cpu.PC != 0x80000180 {
+		t.Fatalf("expected interrupt vector 0x80000180, got 0x%08X", cpu.PC)
+	}
+	if cpu.CP0[CP0_EPC] != 4 {
+		t.Fatalf("expected EPC at instruction after WAIT, got 0x%08X", cpu.CP0[CP0_EPC])
+	}
+}
+
 func TestExecuteERET(t *testing.T) {
 	cpu := createTestCPU()
 	cpu.CP0[14] = 0x80001000 // EPC

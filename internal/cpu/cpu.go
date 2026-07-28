@@ -51,6 +51,10 @@ type CPU struct {
 	// CPU execution state
 	Running bool
 
+	// Waiting reports that WAIT has stopped instruction fetch until an
+	// enabled interrupt is taken.
+	Waiting bool
+
 	// CPU halt status
 	HaltReason HaltReason
 
@@ -151,6 +155,7 @@ func (c *CPU) Reset() {
 	c.Instruction = 0
 
 	c.Running = false
+	c.Waiting = false
 
 	c.HaltReason = HaltNone
 	c.HaltDetail = ""
@@ -184,6 +189,14 @@ func (c *CPU) Fetch() uint32 {
 func (c *CPU) Step() {
 
 	if !c.Running {
+		return
+	}
+
+	if c.Waiting {
+		if c.checkInterrupts() {
+			c.Waiting = false
+		}
+		c.Cycles++
 		return
 	}
 
@@ -267,6 +280,7 @@ func (c *CPU) Stop() {
 func (c *CPU) Halt(reason HaltReason) {
 
 	c.Running = false
+	c.Waiting = false
 
 	c.HaltReason = reason
 }
@@ -275,6 +289,7 @@ func (c *CPU) Halt(reason HaltReason) {
 func (c *CPU) HaltWith(reason HaltReason, format string, args ...any) {
 
 	c.Running = false
+	c.Waiting = false
 
 	c.HaltReason = reason
 
@@ -345,6 +360,7 @@ func (c *CPU) Exception(code uint8, badVAddr uint32) {
 	// Entering the handler cancels any pending branch.
 	c.branchTaken = false
 	c.InDelaySlot = false
+	c.Waiting = false
 }
 
 // exceptionVector returns the general exception vector address selected

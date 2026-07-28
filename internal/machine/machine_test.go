@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/HritikR/t23emu/internal/cpu"
+	"github.com/HritikR/t23emu/internal/device"
 )
 
 func TestMachineCreation(t *testing.T) {
@@ -245,6 +246,28 @@ func TestMachineRunWithCycleLimit(t *testing.T) {
 			"expected CPU cycles=5 got %d",
 			m.CPU.Cycles,
 		)
+	}
+}
+
+func TestMachineTimerInterruptWakesWAIT(t *testing.T) {
+	m := New(1024, nil)
+	m.LoadProgram(0, []uint32{0x42000020}) // wait
+	m.CPU.CP0[cpu.CP0_STATUS] = cpu.STATUS_IE | cpu.CAUSE_IP2
+	m.INTC.Write32(device.INTC_IMCR, 1<<3)
+
+	cycles := m.Run(200001)
+
+	if cycles != 200001 {
+		t.Fatalf("expected to run to timer wakeup, got %d cycles", cycles)
+	}
+	if m.CPU.HaltReason != cpu.HaltNone {
+		t.Fatalf("WAIT should not halt CPU, got %s: %s", m.CPU.HaltReason, m.CPU.HaltDetail)
+	}
+	if m.CPU.PC != 0x80000180 {
+		t.Fatalf("expected timer interrupt vector 0x80000180, got 0x%08X", m.CPU.PC)
+	}
+	if got := uint8((m.CPU.CP0[cpu.CP0_CAUSE] & cpu.CAUSE_EXCCODE) >> 2); got != cpu.EXC_INT {
+		t.Fatalf("expected interrupt exception code, got %d", got)
 	}
 }
 

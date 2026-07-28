@@ -1143,9 +1143,8 @@ func (c *CPU) executeCOP0(inst Instruction) {
 		case COP0CO_DERET:
 			c.executeERET(inst)
 		case COP0CO_WAIT:
-			// With no interrupt sources wired up, waiting forever would
-			// hang silently. Halting says so instead.
-			c.HaltWith(HaltStopped, "wait instruction at 0x%08X with no interrupt source", c.CurrentPC)
+			c.Waiting = true
+			c.retire()
 		case COP0CO_TLBR:
 			c.readIndexedTLB(int(c.CP0[CP0_INDEX] & 31))
 			c.retire()
