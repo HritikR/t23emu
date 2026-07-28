@@ -26,6 +26,10 @@ const (
 	TCUStart uint32 = 0x10002000
 	TCUEnd   uint32 = 0x10002FFF
 
+	// OSTStart is the OS timer block Linux uses as its clocksource.
+	OSTStart uint32 = 0x12000000
+	OSTEnd   uint32 = 0x12000FFF
+
 	GPIOStart uint32 = 0x10010000
 	GPIOEnd   uint32 = 0x1001FFFF
 
@@ -116,6 +120,9 @@ type Machine struct {
 	// TCU is the watchdog, timer/counter and OS timer block.
 	TCU *device.RegisterBlock
 
+	// OST is the Linux OS timer clocksource block.
+	OST *device.RegisterBlock
+
 	// GPIO is the pin multiplexing and direction block.
 	GPIO *device.RegisterBlock
 
@@ -189,6 +196,14 @@ func New(ramSize uint32, romData []byte) *Machine {
 		return cpuCycles()
 	})
 	b.Map(TCUStart, TCUEnd, tcu)
+
+	ost := device.NewOST(func() uint64 {
+		if cpuCycles == nil {
+			return 0
+		}
+		return cpuCycles()
+	})
+	b.Map(OSTStart, OSTEnd, ost)
 
 	gpio := device.NewRegisterBlock("GPIO", GPIOEnd-GPIOStart+1)
 	b.Map(GPIOStart, GPIOEnd, gpio)
@@ -278,6 +293,7 @@ func New(ramSize uint32, romData []byte) *Machine {
 		CPM:           cpm,
 		INTC:          intc,
 		TCU:           tcu,
+		OST:           ost,
 		GPIO:          gpio,
 		DDRC:          ddrc,
 		DDRP:          ddrp,
