@@ -58,8 +58,12 @@ const (
 	OP_SWR   uint8 = 46
 	OP_CACHE uint8 = 47
 	OP_LL    uint8 = 48
+	OP_LWC1  uint8 = 49
 	OP_PREF  uint8 = 51
+	OP_LDC1  uint8 = 53
 	OP_SC    uint8 = 56
+	OP_SWC1  uint8 = 57
+	OP_SDC1  uint8 = 61
 )
 
 // REGIMM sub-opcodes, held in the Rt field.
@@ -97,12 +101,15 @@ const (
 // CP0 Config register bits and reset values used by the emulated T23 core.
 const (
 	CONFIG_M  uint32 = 1 << 31
+	CONFIG_AR uint32 = 1 << 10
 	CONFIG_K0 uint32 = 3
 
 	// Config1 describes a small MIPS32/XBurst-class core with 32 TLB
-	// entries, separate 16 KiB I/D caches, no FPU, and no Config2.
-	CP0_CONFIG1_RESET uint32 = (31 << 25) | (3 << 22) | (4 << 19) | (1 << 16) |
+	// entries, separate 16 KiB I/D caches, no FPU, and Config2 present.
+	CP0_CONFIG1_RESET uint32 = CONFIG_M | (31 << 25) | (3 << 22) | (4 << 19) | (1 << 16) |
 		(3 << 13) | (4 << 10) | (1 << 7)
+	CP0_CONFIG2_RESET uint32 = CONFIG_M
+	CP0_CONFIG3_RESET uint32 = 1 << 13
 )
 
 // CP0 Status register bits
@@ -211,6 +218,14 @@ const (
 	COP0_MFC0 uint8 = 0
 	COP0_MTC0 uint8 = 4
 	COP0_CO   uint8 = 16 // Coprocessor operation: TLB ops, ERET, WAIT, DERET
+)
+
+// COP1 register transfer sub-operations, held in the Rs field.
+const (
+	COP1_MFC1 uint8 = 0
+	COP1_CFC1 uint8 = 2
+	COP1_MTC1 uint8 = 4
+	COP1_CTC1 uint8 = 6
 )
 
 // COP0 "CO" function codes (valid when Rs == COP0_CO).

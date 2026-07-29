@@ -110,8 +110,20 @@ func (c *CPU) Execute(inst Instruction) {
 	case OP_LL:
 		c.executeLL(inst)
 
+	case OP_LWC1:
+		c.executeLWC1(inst)
+
+	case OP_LDC1:
+		c.executeLDC1(inst)
+
 	case OP_SC:
 		c.executeSC(inst)
+
+	case OP_SWC1:
+		c.executeSWC1(inst)
+
+	case OP_SDC1:
+		c.executeSDC1(inst)
 
 	case OP_CACHE:
 		c.executeCACHE(inst)
@@ -123,9 +135,10 @@ func (c *CPU) Execute(inst Instruction) {
 	case OP_COP0:
 		c.executeCOP0(inst)
 
-	case OP_COP1, OP_COP2:
-		// No FPU or coprocessor 2 is fitted, so accesses trap the way
-		// they would on a part without them.
+	case OP_COP1:
+		c.executeCOP1(inst)
+
+	case OP_COP2:
 		c.coprocessorUnusable(inst.Opcode - OP_COP0)
 
 	default:
@@ -416,11 +429,26 @@ func (c *CPU) executeRDHWR(inst Instruction) {
 		c.WriteRegister(inst.Rt, uint32(c.Cycles))
 	case 3: // Cycle counter resolution
 		c.WriteRegister(inst.Rt, 1)
+	case 29: // UserLocal/TLS pointer
+		if c.CurrentPC < 0x80000000 {
+			sp := c.ReadRegister(29)
+			if sp != 0 && (c.UserLocal == 0 || absDiff32(sp, c.UserLocal) > 0x00100000) {
+				c.UserLocal = sp
+			}
+		}
+		c.WriteRegister(inst.Rt, c.UserLocal)
 	default:
 		c.Exception(EXC_RI, 0)
 		return
 	}
 	c.retire()
+}
+
+func absDiff32(a, b uint32) uint32 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }
 
 // setHILO splits a 64-bit result across the HI and LO registers.
@@ -1005,6 +1033,44 @@ func (c *CPU) executeSH(inst Instruction) {
 	c.retire()
 }
 
+func (c *CPU) executeLWC1(inst Instruction) {
+	addr := c.effectiveAddress(inst)
+	if !c.checkLoad(addr, 4) {
+		return
+	}
+	c.FPR[inst.Rt] = c.read32(addr)
+	c.retire()
+}
+
+func (c *CPU) executeSWC1(inst Instruction) {
+	addr := c.effectiveAddress(inst)
+	if !c.checkStore(addr, 4) {
+		return
+	}
+	c.write32(addr, c.FPR[inst.Rt])
+	c.retire()
+}
+
+func (c *CPU) executeLDC1(inst Instruction) {
+	addr := c.effectiveAddress(inst)
+	if !c.checkLoad(addr, 8) {
+		return
+	}
+	c.FPR[inst.Rt] = c.read32(addr)
+	c.FPR[(inst.Rt+1)&31] = c.read32(addr + 4)
+	c.retire()
+}
+
+func (c *CPU) executeSDC1(inst Instruction) {
+	addr := c.effectiveAddress(inst)
+	if !c.checkStore(addr, 8) {
+		return
+	}
+	c.write32(addr, c.FPR[inst.Rt])
+	c.write32(addr+4, c.FPR[(inst.Rt+1)&31])
+	c.retire()
+}
+
 // LWL loads the unaligned left-hand portion of a word, merging it into
 // the high bytes of rt.
 func (c *CPU) executeLWL(inst Instruction) {
@@ -1174,6 +1240,34 @@ func (c *CPU) executeCOP0(inst Instruction) {
 	}
 }
 
+func (c *CPU) executeCOP1(inst Instruction) {
+	switch inst.Rs {
+	case COP1_MFC1:
+		c.WriteRegister(inst.Rt, c.FPR[inst.Rd])
+		c.retire()
+	case COP1_MTC1:
+		c.FPR[inst.Rd] = c.ReadRegister(inst.Rt)
+		c.retire()
+	case COP1_CFC1:
+		switch inst.Rd {
+		case 0:
+			c.WriteRegister(inst.Rt, 0)
+		case 31:
+			c.WriteRegister(inst.Rt, c.FCSR)
+		default:
+			c.WriteRegister(inst.Rt, 0)
+		}
+		c.retire()
+	case COP1_CTC1:
+		if inst.Rd == 31 {
+			c.FCSR = c.ReadRegister(inst.Rt)
+		}
+		c.retire()
+	default:
+		c.Exception(EXC_RI, 0)
+	}
+}
+
 func (c *CPU) executeMFC0(inst Instruction) {
 	c.WriteRegister(inst.Rt, c.readCP0(inst.Rd, inst.Raw&7))
 	c.retire()
@@ -1186,11 +1280,20 @@ func (c *CPU) executeMTC0(inst Instruction) {
 
 func (c *CPU) readCP0(rd uint8, sel uint32) uint32 {
 	switch rd {
+	case CP0_CONTEXT:
+		if sel == 2 {
+			return c.UserLocal
+		}
 	case CP0_COUNT:
 		return c.cp0Count()
 	case CP0_CONFIG:
-		if sel == 1 {
+		switch sel {
+		case 1:
 			return CP0_CONFIG1_RESET
+		case 2:
+			return CP0_CONFIG2_RESET
+		case 3:
+			return CP0_CONFIG3_RESET
 		}
 	}
 	return c.CP0[rd]
@@ -1198,6 +1301,11 @@ func (c *CPU) readCP0(rd uint8, sel uint32) uint32 {
 
 func (c *CPU) writeCP0(rd uint8, sel uint32, value uint32) {
 	switch rd {
+	case CP0_CONTEXT:
+		if sel == 2 {
+			c.UserLocal = value
+			return
+		}
 	case CP0_COUNT:
 		c.countBaseValue = value
 		c.countBaseCycle = c.Cycles

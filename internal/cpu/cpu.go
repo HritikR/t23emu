@@ -17,6 +17,10 @@ type CPU struct {
 	HI uint32
 	LO uint32
 
+	// Floating-point registers are modelled as raw 32-bit lanes.
+	FPR  [32]uint32
+	FCSR uint32
+
 	// PC is the address of the next instruction to fetch.
 	//
 	// MIPS has a one-instruction branch delay slot, so a taken branch
@@ -70,6 +74,10 @@ type CPU struct {
 
 	// Coprocessor 0 registers
 	CP0 [32]uint32
+
+	// UserLocal is CP0 register 4 select 2, read by userspace through
+	// RDHWR register 29 for TLS.
+	UserLocal uint32
 
 	// CP0 Count is derived from Cycles, but writes reset the visible base.
 	countBaseCycle uint64
@@ -143,17 +151,21 @@ func (c *CPU) Reset() {
 	for i := range c.CP0 {
 		c.CP0[i] = 0
 	}
+	for i := range c.FPR {
+		c.FPR[i] = 0
+	}
+	c.FCSR = 0
+	c.UserLocal = 0
 	for i := range c.TLB {
 		c.TLB[i] = TLBEntry{}
 	}
 
-	// Initialize Processor Identification (PRId) register at index 15
-	// A standard MIPS32 processor value.
-	c.CP0[CP0_PRID] = 0x00018000
+	// Match the T23/XBurst PRId expected by the vendor kernel.
+	c.CP0[CP0_PRID] = 0x00d00100
 
 	// Advertise Config1 through Config.M. Linux checks this before reading
 	// the cache/TLB geometry from CP0 Config select 1.
-	c.CP0[CP0_CONFIG] = CONFIG_M | CONFIG_K0
+	c.CP0[CP0_CONFIG] = CONFIG_M | CONFIG_AR | CONFIG_K0
 	c.CP0[CP0_RANDOM] = 31
 	c.countBaseCycle = 0
 	c.countBaseValue = 0
@@ -400,7 +412,6 @@ func (c *CPU) exceptionNoRefill(code uint8, badVAddr uint32) {
 }
 
 func (c *CPU) exception(code uint8, badVAddr uint32, allowRefill bool) {
-
 	c.exceptionRun++
 	if c.MaxExceptionRun > 0 && c.exceptionRun > c.MaxExceptionRun {
 		// The handler itself is faulting. Report the original cause

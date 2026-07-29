@@ -584,7 +584,7 @@ func TestExecuteCOP0_MTC0_MFC0(t *testing.T) {
 	}
 }
 
-func TestCP0ConfigAdvertisesConfig1(t *testing.T) {
+func TestCP0ConfigAdvertisesUserLocal(t *testing.T) {
 	cpu := createTestCPU()
 
 	if got := cpu.CP0[CP0_CONFIG]; got&CONFIG_M == 0 {
@@ -602,6 +602,147 @@ func TestCP0ConfigAdvertisesConfig1(t *testing.T) {
 
 	if got := cpu.ReadRegister(8); got != CP0_CONFIG1_RESET {
 		t.Fatalf("expected Config1 0x%08X, got 0x%08X", CP0_CONFIG1_RESET, got)
+	}
+	if got := cpu.ReadRegister(8); got&CONFIG_M == 0 {
+		t.Fatalf("expected Config1.M to be set, got 0x%08X", got)
+	}
+
+	cpu.Execute(Instruction{
+		Raw:    2,
+		Opcode: OP_COP0,
+		Rs:     COP0_MFC0,
+		Rt:     8,
+		Rd:     CP0_CONFIG,
+	})
+
+	if got := cpu.ReadRegister(8); got != CP0_CONFIG2_RESET {
+		t.Fatalf("expected Config2 0x%08X, got 0x%08X", CP0_CONFIG2_RESET, got)
+	}
+
+	cpu.Execute(Instruction{
+		Raw:    3,
+		Opcode: OP_COP0,
+		Rs:     COP0_MFC0,
+		Rt:     8,
+		Rd:     CP0_CONFIG,
+	})
+
+	if got := cpu.ReadRegister(8); got != CP0_CONFIG3_RESET {
+		t.Fatalf("expected Config3 0x%08X, got 0x%08X", CP0_CONFIG3_RESET, got)
+	}
+}
+
+func TestCP0UserLocalAndRDHWR(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.CP0[CP0_CONTEXT] = 0x80002000
+	cpu.WriteRegister(8, 0x76543210)
+
+	cpu.Execute(Instruction{
+		Raw:    2,
+		Opcode: OP_COP0,
+		Rs:     COP0_MTC0,
+		Rt:     8,
+		Rd:     CP0_CONTEXT,
+	})
+
+	if cpu.CP0[CP0_CONTEXT] != 0x80002000 {
+		t.Fatalf("expected Context to stay unchanged, got 0x%08X", cpu.CP0[CP0_CONTEXT])
+	}
+	if cpu.UserLocal != 0x76543210 {
+		t.Fatalf("expected UserLocal 0x76543210, got 0x%08X", cpu.UserLocal)
+	}
+
+	cpu.Execute(Instruction{
+		Opcode: OP_SPECIAL3,
+		Rt:     9,
+		Rd:     29,
+		Funct:  FUNCT3_RDHWR,
+	})
+
+	if got := cpu.ReadRegister(9); got != 0x76543210 {
+		t.Fatalf("expected RDHWR UserLocal value, got 0x%08X", got)
+	}
+}
+
+func TestCOP1LoadStoreMemoryMoves(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	cpu.WriteRegister(4, 0x80000100)
+	cpu.FPR[20] = 0x11223344
+	cpu.FPR[21] = 0x55667788
+
+	cpu.Execute(Instruction{
+		Opcode:    OP_SDC1,
+		Rs:        4,
+		Rt:        20,
+		Immediate: 0x38,
+	})
+
+	if got := ram.Read32(0x138); got != 0x11223344 {
+		t.Fatalf("expected low word stored, got 0x%08X", got)
+	}
+	if got := ram.Read32(0x13c); got != 0x55667788 {
+		t.Fatalf("expected high word stored, got 0x%08X", got)
+	}
+
+	ram.Write32(0x140, 0xaabbccdd)
+	ram.Write32(0x144, 0xeeff0011)
+	cpu.Execute(Instruction{
+		Opcode:    OP_LDC1,
+		Rs:        4,
+		Rt:        22,
+		Immediate: 0x40,
+	})
+
+	if cpu.FPR[22] != 0xaabbccdd || cpu.FPR[23] != 0xeeff0011 {
+		t.Fatalf("expected double load into FPRs, got 0x%08X 0x%08X", cpu.FPR[22], cpu.FPR[23])
+	}
+
+	cpu.FPR[24] = 0x01020304
+	cpu.Execute(Instruction{
+		Opcode:    OP_SWC1,
+		Rs:        4,
+		Rt:        24,
+		Immediate: 0x48,
+	})
+	if got := ram.Read32(0x148); got != 0x01020304 {
+		t.Fatalf("expected single word stored, got 0x%08X", got)
+	}
+
+	ram.Write32(0x14c, 0xfeedface)
+	cpu.Execute(Instruction{
+		Opcode:    OP_LWC1,
+		Rs:        4,
+		Rt:        25,
+		Immediate: 0x4c,
+	})
+	if cpu.FPR[25] != 0xfeedface {
+		t.Fatalf("expected single word loaded, got 0x%08X", cpu.FPR[25])
+	}
+}
+
+func TestCOP1RegisterTransfers(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.WriteRegister(8, 0x12345678)
+
+	cpu.Execute(Instruction{Opcode: OP_COP1, Rs: COP1_MTC1, Rt: 8, Rd: 4})
+	if cpu.FPR[4] != 0x12345678 {
+		t.Fatalf("expected MTC1 to write FPR, got 0x%08X", cpu.FPR[4])
+	}
+
+	cpu.Execute(Instruction{Opcode: OP_COP1, Rs: COP1_MFC1, Rt: 9, Rd: 4})
+	if got := cpu.ReadRegister(9); got != 0x12345678 {
+		t.Fatalf("expected MFC1 value, got 0x%08X", got)
+	}
+
+	cpu.WriteRegister(10, 0x00020001)
+	cpu.Execute(Instruction{Opcode: OP_COP1, Rs: COP1_CTC1, Rt: 10, Rd: 31})
+	if cpu.FCSR != 0x00020001 {
+		t.Fatalf("expected CTC1 to write FCSR, got 0x%08X", cpu.FCSR)
+	}
+
+	cpu.Execute(Instruction{Opcode: OP_COP1, Rs: COP1_CFC1, Rt: 11, Rd: 31})
+	if got := cpu.ReadRegister(11); got != 0x00020001 {
+		t.Fatalf("expected CFC1 FCSR value, got 0x%08X", got)
 	}
 }
 
