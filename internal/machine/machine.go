@@ -42,6 +42,10 @@ const (
 	// bank-0 dispatcher adds 8 to the pending bit index before do_IRQ().
 	SFCIRQ uint8 = 7
 
+	// I2C0IRQ is the INTC bit the vendor kernel unmasks for the hardware
+	// I2C0 controller at 0x10050000.
+	I2C0IRQ uint8 = 60
+
 	GPIOStart uint32 = 0x10010000
 	GPIOEnd   uint32 = 0x1001FFFF
 
@@ -150,7 +154,7 @@ type Machine struct {
 	GPIO *device.RegisterBlock
 
 	// I2C0 is the hardware I2C controller.
-	I2C0 *device.RegisterBlock
+	I2C0 *device.I2C
 
 	// DDRC is the DDR memory controller block.
 	DDRC *device.RegisterBlock
@@ -292,6 +296,13 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 			intc.Deassert(SFCIRQ)
 		}
 		traceSFCIRQf("line assert=%v irq=%d raw=0x%08x pending=%d", assert, SFCIRQ, intc.RawPending(), intc.Pending())
+	}
+	i2c0.Interrupt = func(assert bool) {
+		if assert {
+			intc.Assert(I2C0IRQ)
+		} else {
+			intc.Deassert(I2C0IRQ)
+		}
 	}
 
 	gmac := device.NewGMAC()

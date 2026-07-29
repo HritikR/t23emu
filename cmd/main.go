@@ -71,7 +71,7 @@ func main() {
 		"TCU":    m.TCU,
 		"OST":    m.OST.RegisterBlock,
 		"GPIO":   m.GPIO,
-		"I2C0":   m.I2C0,
+		"I2C0":   m.I2C0.RegisterBlock,
 		"DDRC":   m.DDRC,
 		"DDRP":   m.DDRP,
 		"SFC":    m.SFC.RegisterBlock,
