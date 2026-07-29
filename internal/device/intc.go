@@ -47,9 +47,10 @@ func (i *INTC) Read32(addr uint32) uint32 {
 
 	var value uint32
 	switch offset {
-	case INTC_ISR, INTC_IPR:
+	case INTC_ISR:
 		value = i.pending &^ i.mask
-		i.pending &^= value
+	case INTC_IPR:
+		value = i.pending // REMOVED: i.pending &^= value (Reads must be side-effect free)
 	case INTC_IMR:
 		value = i.mask
 	default:
@@ -61,6 +62,13 @@ func (i *INTC) Read32(addr uint32) uint32 {
 	}
 
 	return value
+}
+
+// Add Deassert to allow clearing pending interrupt lines
+func (i *INTC) Deassert(irq uint8) {
+	if irq < 32 {
+		i.pending &^= (1 << irq)
+	}
 }
 
 func (i *INTC) Write32(addr uint32, value uint32) {

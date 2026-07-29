@@ -298,6 +298,8 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 	assertTimer := func() {
 		if ost.OST1Expired() {
 			intc.Assert(OSTIRQ)
+		} else {
+			intc.Deassert(OSTIRQ)
 		}
 	}
 	c.InterruptPending = func() uint32 {
