@@ -712,7 +712,12 @@ func (c *CPU) executeSLL(inst Instruction) {
 }
 
 func (c *CPU) executeSRL(inst Instruction) {
-	c.WriteRegister(inst.Rd, c.ReadRegister(inst.Rt)>>inst.Shamt)
+	value := c.ReadRegister(inst.Rt)
+	if inst.Rs == 1 {
+		c.WriteRegister(inst.Rd, rotateRight32(value, uint32(inst.Shamt)))
+	} else {
+		c.WriteRegister(inst.Rd, value>>inst.Shamt)
+	}
 	c.retire()
 }
 
@@ -729,7 +734,12 @@ func (c *CPU) executeSLLV(inst Instruction) {
 
 func (c *CPU) executeSRLV(inst Instruction) {
 	shift := c.ReadRegister(inst.Rs) & 0x1F
-	c.WriteRegister(inst.Rd, c.ReadRegister(inst.Rt)>>shift)
+	value := c.ReadRegister(inst.Rt)
+	if inst.Shamt == 1 {
+		c.WriteRegister(inst.Rd, rotateRight32(value, shift))
+	} else {
+		c.WriteRegister(inst.Rd, value>>shift)
+	}
 	c.retire()
 }
 
@@ -737,6 +747,14 @@ func (c *CPU) executeSRAV(inst Instruction) {
 	shift := c.ReadRegister(inst.Rs) & 0x1F
 	c.WriteRegister(inst.Rd, uint32(int32(c.ReadRegister(inst.Rt))>>shift))
 	c.retire()
+}
+
+func rotateRight32(value uint32, shift uint32) uint32 {
+	shift &= 0x1F
+	if shift == 0 {
+		return value
+	}
+	return (value >> shift) | (value << (32 - shift))
 }
 
 // ---------------------------------------------------------------------

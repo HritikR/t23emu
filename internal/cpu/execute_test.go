@@ -524,6 +524,36 @@ func TestExecuteShifts(t *testing.T) {
 	}
 }
 
+func TestExecuteRotates(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.WriteRegister(8, 0x80000001)
+	cpu.WriteRegister(10, 4)
+
+	cpu.Execute(Instruction{
+		Opcode: OP_SPECIAL,
+		Rs:     1,
+		Rt:     8,
+		Rd:     9,
+		Shamt:  4,
+		Funct:  FUNCT_SRL,
+	})
+	if got := cpu.ReadRegister(9); got != 0x18000000 {
+		t.Fatalf("ROTR failed: expected 0x18000000, got 0x%08X", got)
+	}
+
+	cpu.Execute(Instruction{
+		Opcode: OP_SPECIAL,
+		Rs:     10,
+		Rt:     8,
+		Rd:     9,
+		Shamt:  1,
+		Funct:  FUNCT_SRLV,
+	})
+	if got := cpu.ReadRegister(9); got != 0x18000000 {
+		t.Fatalf("ROTRV failed: expected 0x18000000, got 0x%08X", got)
+	}
+}
+
 func TestExecuteSLT(t *testing.T) {
 	cpu := createTestCPU()
 	cpu.WriteRegister(8, 0xFFFFFFFF) // -1 signed
@@ -1230,6 +1260,63 @@ func TestExecuteByteAccess(t *testing.T) {
 	val8 := ram.Read8(11)
 	if val8 != 0x8A {
 		t.Fatalf("SB failed: expected byte at 11 to be 0x8A, got 0x%02X", val8)
+	}
+}
+
+func TestUnalignedLoadPairLittleEndian(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	for i, value := range []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88} {
+		ram.Write8(uint32(0x100+i), value)
+	}
+
+	cpu.WriteRegister(4, 0x80000101)
+	cpu.WriteRegister(8, 0xa5a5a5a5)
+
+	cpu.Execute(Instruction{
+		Opcode:    OP_LWL,
+		Rs:        4,
+		Rt:        8,
+		Immediate: 3,
+	})
+	cpu.Execute(Instruction{
+		Opcode:    OP_LWR,
+		Rs:        4,
+		Rt:        8,
+		Immediate: 0,
+	})
+
+	if got := cpu.ReadRegister(8); got != 0x55443322 {
+		t.Fatalf("expected unaligned load pair to produce 0x55443322, got 0x%08X", got)
+	}
+}
+
+func TestUnalignedStorePairLittleEndian(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	for i := 0; i < 8; i++ {
+		ram.Write8(uint32(0x100+i), 0xaa)
+	}
+
+	cpu.WriteRegister(4, 0x80000101)
+	cpu.WriteRegister(8, 0x55443322)
+
+	cpu.Execute(Instruction{
+		Opcode:    OP_SWL,
+		Rs:        4,
+		Rt:        8,
+		Immediate: 3,
+	})
+	cpu.Execute(Instruction{
+		Opcode:    OP_SWR,
+		Rs:        4,
+		Rt:        8,
+		Immediate: 0,
+	})
+
+	want := []byte{0xaa, 0x22, 0x33, 0x44, 0x55, 0xaa, 0xaa, 0xaa}
+	for i, expected := range want {
+		if got := ram.Read8(uint32(0x100 + i)); got != expected {
+			t.Fatalf("byte %d: expected 0x%02X, got 0x%02X", i, expected, got)
+		}
 	}
 }
 
