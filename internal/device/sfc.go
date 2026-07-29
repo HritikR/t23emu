@@ -54,6 +54,8 @@ type SFC struct {
 	flash []byte
 	reply []byte
 
+	command byte
+
 	active    bool
 	done      bool
 	addr      uint32
@@ -158,7 +160,8 @@ func (s *SFC) Write8(addr uint32, value byte) {
 }
 
 func (s *SFC) startTransfer() {
-	s.reply = s.commandReply(byte(s.regs[SFC_TRAN_CONF]))
+	s.command = byte(s.regs[SFC_TRAN_CONF])
+	s.reply = s.commandReply(s.command)
 	s.addr = s.regs[SFC_DEV_ADDR]
 	s.index = 0
 	s.remaining = s.regs[SFC_TRAN_LEN]
@@ -198,6 +201,8 @@ func (s *SFC) readData() uint32 {
 		s.done = true
 	}
 
+	s.completeIfFinished()
+
 	return value
 }
 
@@ -212,6 +217,21 @@ func (s *SFC) readByte() (byte, bool) {
 		return s.flash[s.addr], true
 	}
 	return 0, false
+}
+
+func (s *SFC) completeIfFinished() {
+	if s.reply != nil && s.command != 0x05 && s.command != 0x35 && s.index >= uint32(len(s.reply)) {
+		s.active = false
+		s.done = true
+		return
+	}
+
+	if s.remaining != 0 {
+		return
+	}
+
+	s.active = false
+	s.done = true
 }
 
 func (s *SFC) commandReply(command byte) []byte {
