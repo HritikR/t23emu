@@ -26,3 +26,20 @@ func TestDWC2GSNPSIDReports300A(t *testing.T) {
 		t.Fatalf("expected DWC2 3.00a id, got 0x%08X", got)
 	}
 }
+
+func TestDWC2HardwareConfigReportsEndpointsAndFIFO(t *testing.T) {
+	dwc2 := NewDWC2()
+
+	if got := dwc2.Read32(DWC2_GHWCFG2); got != DWC2_GHWCFG2_VALUE {
+		t.Fatalf("expected GHWCFG2 reset value, got 0x%08X", got)
+	}
+	if got := dwc2.Read32(DWC2_GHWCFG3); got != DWC2_GHWCFG3_VALUE {
+		t.Fatalf("expected GHWCFG3 reset value, got 0x%08X", got)
+	}
+	if got := dwc2.Read32(DWC2_GHWCFG4); got != DWC2_GHWCFG4_VALUE {
+		t.Fatalf("expected GHWCFG4 reset value, got 0x%08X", got)
+	}
+	if got := dwc2.Read32(DWC2_GRXFSIZ); got != DWC2_GRXFSIZ_VALUE {
+		t.Fatalf("expected GRXFSIZ reset value, got 0x%08X", got)
+	}
+}
