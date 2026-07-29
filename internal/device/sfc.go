@@ -67,6 +67,7 @@ type SFC struct {
 	active    bool
 	done      bool
 	wel       bool
+	dmaArmed  bool
 	addr      uint32
 	index     uint32
 	remaining uint32
@@ -164,6 +165,8 @@ func (s *SFC) Write32(addr uint32, value uint32) {
 	}
 
 	switch offset {
+	case SFC_MEM_ADDR:
+		s.dmaArmed = value != 0
 	case SFC_TRIG:
 		start := value&SFC_TRIG_START != 0
 		if value&SFC_TRIG_FLUSH != 0 {
@@ -277,6 +280,7 @@ func (s *SFC) startTransfer() {
 
 	s.active = s.remaining > 0
 	s.tryDMARead()
+	s.dmaArmed = false
 	s.done = true
 	if s.active && s.remaining > 0 {
 		if !isReadCommand(s.command) && s.reply == nil {
@@ -290,7 +294,7 @@ func (s *SFC) startTransfer() {
 }
 
 func (s *SFC) tryDMARead() {
-	if s.DMAWrite == nil || !s.active || s.remaining == 0 || !isReadCommand(s.command) {
+	if s.DMAWrite == nil || !s.dmaArmed || !s.active || s.remaining == 0 || !isReadCommand(s.command) {
 		return
 	}
 

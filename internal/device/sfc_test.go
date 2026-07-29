@@ -163,6 +163,30 @@ func TestSFCDMAReadJEDECID(t *testing.T) {
 	}
 }
 
+func TestSFCDoesNotReuseStaleDMAAddress(t *testing.T) {
+	sfc := NewSFC([]byte{0x06, 0, 0, 0}, 4)
+	dmaWrites := 0
+	sfc.DMAWrite = func(uint32, []byte) {
+		dmaWrites++
+	}
+
+	sfc.Write32(SFC_MEM_ADDR, 0x100)
+	sfc.Write32(SFC_TRAN_CONF, 0x05)
+	sfc.Write32(SFC_TRAN_LEN, 1)
+	sfc.Write32(SFC_TRIG, SFC_TRIG_START)
+
+	sfc.Write32(SFC_TRAN_CONF, 0x9f)
+	sfc.Write32(SFC_TRAN_LEN, 3)
+	sfc.Write32(SFC_TRIG, SFC_TRIG_START)
+
+	if dmaWrites != 1 {
+		t.Fatalf("expected only the freshly armed transfer to use DMA, got %d DMA writes", dmaWrites)
+	}
+	if got := sfc.Read32(SFC_DR); got != 0x00176085 {
+		t.Fatalf("expected stale-DMA JEDEC read to remain available via DR, got 0x%08X", got)
+	}
+}
+
 func TestSFCStatusCommandsReturnReady(t *testing.T) {
 	sfc := NewSFC([]byte{0xff, 0xff, 0xff, 0xff}, 4)
 
