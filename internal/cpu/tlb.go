@@ -14,6 +14,9 @@ const (
 	entryLoPFN  uint32 = 0x03FFFFC0
 	entryHiVPN  uint32 = 0xFFFFE000
 	entryHiASID uint32 = 0x000000FF
+
+	contextPTEBase uint32 = 0xFF800000
+	contextBadVPN2 uint32 = 0x007FFFF0
 )
 
 // TranslateAddress applies the fixed unmapped kernel segments and the CP0 TLB.
@@ -28,11 +31,17 @@ func (c *CPU) TranslateAddress(addr uint32) (uint32, bool) {
 	if phys, ok, _ := c.lookupTLB(addr, false); ok {
 		return phys, true
 	}
-	return addr, addr < 0x80000000
+	return addr, false
 }
 
 func isTLBMappedSegment(addr uint32) bool {
 	return addr < 0x80000000 || (addr >= 0xC0000000 && addr < 0xE0000000)
+}
+
+func (c *CPU) updateTLBExceptionState(badVAddr uint32) {
+	c.CP0[CP0_BADVADDR] = badVAddr
+	c.CP0[CP0_ENTRYHI] = (c.CP0[CP0_ENTRYHI] & entryHiASID) | (badVAddr & entryHiVPN)
+	c.CP0[CP0_CONTEXT] = (c.CP0[CP0_CONTEXT] & contextPTEBase) | ((badVAddr >> 9) & contextBadVPN2)
 }
 
 func (c *CPU) lookupTLB(addr uint32, write bool) (uint32, bool, int) {
@@ -117,7 +126,12 @@ func (c *CPU) randomTLBIndex() int {
 	random := int(c.CP0[CP0_RANDOM] & 31)
 	wired := int(c.CP0[CP0_WIRED] & 31)
 	if random < wired {
-		random = wired
+		random = 31
 	}
+	next := random - 1
+	if next < wired {
+		next = 31
+	}
+	c.CP0[CP0_RANDOM] = uint32(next)
 	return random
 }

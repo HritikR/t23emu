@@ -218,6 +218,29 @@ func TestTLBTranslatesKseg2Address(t *testing.T) {
 	}
 }
 
+func TestKusegRequiresTLBMapping(t *testing.T) {
+	ram := memory.NewRAM(0x2000)
+	b := bus.New()
+	b.Map(0, 0x1FFF, ram)
+
+	cpu := New(b)
+	b.SetTranslator(cpu.TranslateAddress)
+
+	if b.HasMapping(0x1000) {
+		t.Fatalf("expected kuseg address without TLB entry to be unmapped")
+	}
+
+	cpu.CP0[CP0_INDEX] = 0
+	cpu.CP0[CP0_ENTRYHI] = 0
+	cpu.CP0[CP0_ENTRYLO0] = entryLoV | entryLoD | entryLoG
+	cpu.CP0[CP0_ENTRYLO1] = (1 << 6) | entryLoV | entryLoD | entryLoG
+	cpu.writeIndexedTLB(0)
+
+	if !b.HasMapping(0x1000) {
+		t.Fatalf("expected kuseg address with TLB entry to be mapped")
+	}
+}
+
 func TestCOP0TLBProbeAndRead(t *testing.T) {
 	cpu := createTestCPU()
 
@@ -243,6 +266,28 @@ func TestCOP0TLBProbeAndRead(t *testing.T) {
 	}
 	if cpu.CP0[CP0_ENTRYLO0]&entryLoV == 0 {
 		t.Fatalf("expected TLBR to restore valid EntryLo0, got 0x%08X", cpu.CP0[CP0_ENTRYLO0])
+	}
+}
+
+func TestTLBWriteRandomRotatesIndex(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.CP0[CP0_RANDOM] = 31
+	cpu.CP0[CP0_ENTRYHI] = 0x00400000
+	cpu.CP0[CP0_ENTRYLO0] = entryLoV | entryLoD | entryLoG
+	cpu.CP0[CP0_ENTRYLO1] = entryLoV | entryLoD | entryLoG
+
+	cpu.Execute(Instruction{Opcode: OP_COP0, Rs: COP0_CO, Funct: COP0CO_TLBWR})
+	cpu.CP0[CP0_ENTRYHI] = 0x00800000
+	cpu.Execute(Instruction{Opcode: OP_COP0, Rs: COP0_CO, Funct: COP0CO_TLBWR})
+
+	if cpu.TLB[31].EntryHi&entryHiVPN != 0x00400000 {
+		t.Fatalf("expected first random write at index 31")
+	}
+	if cpu.TLB[30].EntryHi&entryHiVPN != 0x00800000 {
+		t.Fatalf("expected second random write at index 30")
+	}
+	if cpu.CP0[CP0_RANDOM] != 29 {
+		t.Fatalf("expected Random to decrement to 29, got %d", cpu.CP0[CP0_RANDOM])
 	}
 }
 
@@ -288,5 +333,29 @@ func TestKseg2InvalidStoreRaisesTLBSGeneralException(t *testing.T) {
 	}
 	if cpu.PC != 0x80000180 {
 		t.Fatalf("expected general exception vector 0x80000180, got 0x%08X", cpu.PC)
+	}
+}
+
+func TestKusegFetchMissRaisesTLBLRefill(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.CP0[CP0_STATUS] = 0
+	cpu.CP0[CP0_CONTEXT] = 0x80400000
+	cpu.PC = 0x00400000
+	cpu.NextPC = 0x00400004
+	cpu.Running = true
+
+	cpu.Step()
+
+	if got := (cpu.CP0[CP0_CAUSE] >> 2) & 0x1F; got != uint32(EXC_TLBL) {
+		t.Fatalf("expected TLBL, got %d", got)
+	}
+	if cpu.CP0[CP0_BADVADDR] != 0x00400000 {
+		t.Fatalf("expected BadVAddr 00400000, got 0x%08X", cpu.CP0[CP0_BADVADDR])
+	}
+	if cpu.CP0[CP0_CONTEXT] != 0x80002000 {
+		t.Fatalf("expected Context 80002000, got 0x%08X", cpu.CP0[CP0_CONTEXT])
+	}
+	if cpu.PC != 0x80000000 {
+		t.Fatalf("expected TLB refill vector 0x80000000, got 0x%08X", cpu.PC)
 	}
 }

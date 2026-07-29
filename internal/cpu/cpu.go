@@ -241,7 +241,15 @@ func (c *CPU) Step() {
 	// Address Error check for Fetch
 	if !c.Bus.HasMapping(pc) {
 		c.CurrentPC = pc
-		c.Exception(EXC_ADEL, pc)
+		if isTLBMappedSegment(pc) {
+			if _, _, index := c.lookupTLB(pc, false); index >= 0 {
+				c.exceptionNoRefill(EXC_TLBL, pc)
+			} else {
+				c.Exception(EXC_TLBL, pc)
+			}
+		} else {
+			c.Exception(EXC_ADEL, pc)
+		}
 		if c.RecordHistory {
 			c.currentMemAddr = 0
 			c.currentMemVal = 0
@@ -407,8 +415,7 @@ func (c *CPU) exception(code uint8, badVAddr uint32, allowRefill bool) {
 	refill := allowRefill && (code == EXC_TLBL || code == EXC_TLBS) && status&STATUS_EXL == 0
 
 	if code == EXC_ADEL || code == EXC_ADES || code == EXC_TLBL || code == EXC_TLBS {
-		c.CP0[CP0_BADVADDR] = badVAddr
-		c.CP0[CP0_ENTRYHI] = (c.CP0[CP0_ENTRYHI] & entryHiASID) | (badVAddr & entryHiVPN)
+		c.updateTLBExceptionState(badVAddr)
 	}
 
 	// EPC and the BD flag are only meaningful for the outermost
