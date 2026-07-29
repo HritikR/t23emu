@@ -85,6 +85,7 @@ const (
 	CP0_CONTEXT  uint8 = 4
 	CP0_PAGEMASK uint8 = 5
 	CP0_WIRED    uint8 = 6
+	CP0_HWRENA   uint8 = 7
 	CP0_BADVADDR uint8 = 8
 	CP0_COUNT    uint8 = 9
 	CP0_ENTRYHI  uint8 = 10

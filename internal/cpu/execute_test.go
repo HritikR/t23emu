@@ -634,6 +634,7 @@ func TestCP0ConfigAdvertisesUserLocal(t *testing.T) {
 
 func TestCP0UserLocalAndRDHWR(t *testing.T) {
 	cpu := createTestCPU()
+	cpu.CP0[CP0_HWRENA] = 1 << 29
 	cpu.CP0[CP0_CONTEXT] = 0x80002000
 	cpu.WriteRegister(8, 0x76543210)
 
@@ -661,6 +662,51 @@ func TestCP0UserLocalAndRDHWR(t *testing.T) {
 
 	if got := cpu.ReadRegister(9); got != 0x76543210 {
 		t.Fatalf("expected RDHWR UserLocal value, got 0x%08X", got)
+	}
+}
+
+func TestRDHWRUserLocalDoesNotInferFromStack(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.CurrentPC = 0x00401000
+	cpu.CP0[CP0_HWRENA] = 1 << 29
+	cpu.UserLocal = 0x775b8000
+	cpu.WriteRegister(29, 0x7fffe000)
+
+	cpu.Execute(Instruction{
+		Opcode: OP_SPECIAL3,
+		Rt:     9,
+		Rd:     29,
+		Funct:  FUNCT3_RDHWR,
+	})
+
+	if got := cpu.ReadRegister(9); got != 0x775b8000 {
+		t.Fatalf("expected RDHWR to return UserLocal, got 0x%08X", got)
+	}
+	if cpu.UserLocal != 0x775b8000 {
+		t.Fatalf("expected RDHWR not to mutate UserLocal, got 0x%08X", cpu.UserLocal)
+	}
+}
+
+func TestUserRDHWRDisabledRaisesReservedInstruction(t *testing.T) {
+	cpu := createTestCPU()
+	cpu.CurrentPC = 0x00401000
+	cpu.UserLocal = 0x775b8000
+
+	cpu.Execute(Instruction{
+		Opcode: OP_SPECIAL3,
+		Rt:     9,
+		Rd:     29,
+		Funct:  FUNCT3_RDHWR,
+	})
+
+	if got := cpu.ReadRegister(9); got != 0 {
+		t.Fatalf("expected disabled RDHWR not to write target, got 0x%08X", got)
+	}
+	if excCode := (cpu.CP0[CP0_CAUSE] & CAUSE_EXCCODE) >> 2; excCode != uint32(EXC_RI) {
+		t.Fatalf("expected RI exception, got %d", excCode)
+	}
+	if cpu.CP0[CP0_EPC] != 0x00401000 {
+		t.Fatalf("expected EPC at user RDHWR, got 0x%08X", cpu.CP0[CP0_EPC])
 	}
 }
 

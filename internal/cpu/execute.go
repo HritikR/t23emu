@@ -420,6 +420,11 @@ func (c *CPU) executeSpecial3(inst Instruction) {
 // executeRDHWR reads a hardware register. Only the registers a boot
 // loader plausibly touches are provided.
 func (c *CPU) executeRDHWR(inst Instruction) {
+	if c.CurrentPC < 0x80000000 && c.CP0[CP0_HWRENA]&(uint32(1)<<inst.Rd) == 0 {
+		c.Exception(EXC_RI, 0)
+		return
+	}
+
 	switch inst.Rd {
 	case 0: // CPU number
 		c.WriteRegister(inst.Rt, 0)
@@ -430,25 +435,12 @@ func (c *CPU) executeRDHWR(inst Instruction) {
 	case 3: // Cycle counter resolution
 		c.WriteRegister(inst.Rt, 1)
 	case 29: // UserLocal/TLS pointer
-		if c.CurrentPC < 0x80000000 {
-			sp := c.ReadRegister(29)
-			if sp != 0 && (c.UserLocal == 0 || absDiff32(sp, c.UserLocal) > 0x00100000) {
-				c.UserLocal = sp
-			}
-		}
 		c.WriteRegister(inst.Rt, c.UserLocal)
 	default:
 		c.Exception(EXC_RI, 0)
 		return
 	}
 	c.retire()
-}
-
-func absDiff32(a, b uint32) uint32 {
-	if a > b {
-		return a - b
-	}
-	return b - a
 }
 
 // setHILO splits a 64-bit result across the HI and LO registers.
