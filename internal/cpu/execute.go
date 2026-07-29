@@ -927,7 +927,7 @@ func (c *CPU) executeLW(inst Instruction) {
 	if !c.checkLoad(addr, 4) {
 		return
 	}
-	c.WriteRegister(inst.Rt, c.Bus.Read32(addr))
+	c.WriteRegister(inst.Rt, c.read32(addr))
 	c.retire()
 }
 
@@ -939,7 +939,7 @@ func (c *CPU) executeSW(inst Instruction) {
 	if !c.checkStore(addr, 4) {
 		return
 	}
-	c.Bus.Write32(addr, c.ReadRegister(inst.Rt))
+	c.write32(addr, c.ReadRegister(inst.Rt))
 	c.retire()
 }
 
@@ -948,7 +948,7 @@ func (c *CPU) executeLB(inst Instruction) {
 	if !c.checkLoad(addr, 1) {
 		return
 	}
-	c.WriteRegister(inst.Rt, uint32(int32(int8(c.Bus.Read8(addr)))))
+	c.WriteRegister(inst.Rt, uint32(int32(int8(c.read8(addr)))))
 	c.retire()
 }
 
@@ -957,7 +957,7 @@ func (c *CPU) executeLBU(inst Instruction) {
 	if !c.checkLoad(addr, 1) {
 		return
 	}
-	c.WriteRegister(inst.Rt, uint32(c.Bus.Read8(addr)))
+	c.WriteRegister(inst.Rt, uint32(c.read8(addr)))
 	c.retire()
 }
 
@@ -966,7 +966,7 @@ func (c *CPU) executeLH(inst Instruction) {
 	if !c.checkLoad(addr, 2) {
 		return
 	}
-	c.WriteRegister(inst.Rt, uint32(int32(int16(c.Bus.Read16(addr)))))
+	c.WriteRegister(inst.Rt, uint32(int32(int16(c.read16(addr)))))
 	c.retire()
 }
 
@@ -975,7 +975,7 @@ func (c *CPU) executeLHU(inst Instruction) {
 	if !c.checkLoad(addr, 2) {
 		return
 	}
-	c.WriteRegister(inst.Rt, uint32(c.Bus.Read16(addr)))
+	c.WriteRegister(inst.Rt, uint32(c.read16(addr)))
 	c.retire()
 }
 
@@ -984,7 +984,7 @@ func (c *CPU) executeSB(inst Instruction) {
 	if !c.checkStore(addr, 1) {
 		return
 	}
-	c.Bus.Write8(addr, byte(c.ReadRegister(inst.Rt)))
+	c.write8(addr, byte(c.ReadRegister(inst.Rt)))
 	c.retire()
 }
 
@@ -993,7 +993,7 @@ func (c *CPU) executeSH(inst Instruction) {
 	if !c.checkStore(addr, 2) {
 		return
 	}
-	c.Bus.Write16(addr, uint16(c.ReadRegister(inst.Rt)))
+	c.write16(addr, uint16(c.ReadRegister(inst.Rt)))
 	c.retire()
 }
 
@@ -1006,7 +1006,7 @@ func (c *CPU) executeLWL(inst Instruction) {
 		return
 	}
 
-	word := c.Bus.Read32(aligned)
+	word := c.read32(aligned)
 
 	// The addressed byte becomes the most significant byte of rt, with
 	// lower-addressed bytes of the same word filling downwards. Offset 0
@@ -1030,7 +1030,7 @@ func (c *CPU) executeLWR(inst Instruction) {
 		return
 	}
 
-	word := c.Bus.Read32(aligned)
+	word := c.read32(aligned)
 
 	// The addressed byte becomes the least significant byte of rt, with
 	// higher-addressed bytes of the same word filling upwards. Offset 0
@@ -1060,8 +1060,8 @@ func (c *CPU) executeSWL(inst Instruction) {
 
 	mask := uint32(0xFFFFFFFF) >> (24 - shift)
 
-	word := c.Bus.Read32(aligned)
-	c.Bus.Write32(aligned, (word & ^mask)|((value>>(24-shift))&mask))
+	word := c.read32(aligned)
+	c.write32(aligned, (word & ^mask)|((value>>(24-shift))&mask))
 	c.retire()
 }
 
@@ -1079,8 +1079,8 @@ func (c *CPU) executeSWR(inst Instruction) {
 
 	mask := uint32(0xFFFFFFFF) << shift
 
-	word := c.Bus.Read32(aligned)
-	c.Bus.Write32(aligned, (word & ^mask)|((value<<shift)&mask))
+	word := c.read32(aligned)
+	c.write32(aligned, (word & ^mask)|((value<<shift)&mask))
 	c.retire()
 }
 
@@ -1090,7 +1090,7 @@ func (c *CPU) executeLL(inst Instruction) {
 	if !c.checkLoad(addr, 4) {
 		return
 	}
-	c.WriteRegister(inst.Rt, c.Bus.Read32(addr))
+	c.WriteRegister(inst.Rt, c.read32(addr))
 	c.CP0[CP0_LLADDR] = addr >> 4
 	c.LLBit = true
 	c.retire()
@@ -1105,7 +1105,7 @@ func (c *CPU) executeSC(inst Instruction) {
 	}
 
 	if c.LLBit {
-		c.Bus.Write32(addr, c.ReadRegister(inst.Rt))
+		c.write32(addr, c.ReadRegister(inst.Rt))
 		c.WriteRegister(inst.Rt, 1)
 	} else {
 		c.WriteRegister(inst.Rt, 0)

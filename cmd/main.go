@@ -22,6 +22,7 @@ func main() {
 	traceFrom := flag.Uint64("trace-from", 0, "Begin instruction tracing at this cycle")
 	liveUART := flag.Bool("live-uart", true, "Echo UART output live while the emulator runs")
 	uartLimit := flag.Int("uart-limit", 16384, "Maximum captured UART bytes to print per port; use 0 for unlimited")
+	history := flag.Bool("history", false, "Save and print history of the last 40 executed instructions on halt")
 
 	flag.Parse()
 
@@ -41,6 +42,7 @@ func main() {
 	fmt.Printf("Initializing T23 Machine (RAM: %d bytes, Flash: %d bytes, Max Cycles: %d)...\n", *ramSize, *flashSize, *cycles)
 
 	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize))
+	m.CPU.RecordHistory = *history
 	if !*liveUART {
 		for _, port := range m.UARTs {
 			port.SetOutput(io.Discard)
@@ -124,6 +126,31 @@ func main() {
 		}
 	}
 	fmt.Printf("  HI: 0x%08X  LO: 0x%08X\n", m.CPU.HI, m.CPU.LO)
+
+	if *history {
+		fmt.Println("\n--- Last 40 Instructions ---")
+		historyEntries := m.CPU.GetHistory()
+		if len(historyEntries) == 0 {
+			fmt.Println("  <no instructions executed>")
+		} else {
+			fmt.Printf("  %-12s %-12s %-12s %-40s %s\n", "Cycle", "PC", "Instruction", "Disassembly", "Memory Access")
+			for _, entry := range historyEntries {
+				marker := " "
+				if entry.InDelaySlot {
+					marker = "+"
+				}
+				memStr := ""
+				if entry.MemAccess == "R" {
+					memStr = fmt.Sprintf("Read 0x%08X from 0x%08X", entry.MemVal, entry.MemAddr)
+				} else if entry.MemAccess == "W" {
+					memStr = fmt.Sprintf("Write 0x%08X to 0x%08X", entry.MemVal, entry.MemAddr)
+				}
+				fmt.Printf("  [%010d]%s 0x%08X   0x%08X   %-40s %s\n",
+					entry.Cycle, marker, entry.PC, entry.Instruction,
+					cpu.Disassemble(entry.Instruction, entry.PC), memStr)
+			}
+		}
+	}
 
 	reportPeripherals(blocks)
 

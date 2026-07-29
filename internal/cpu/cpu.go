@@ -106,6 +106,15 @@ type CPU struct {
 	// otherwise spin forever, burning the whole cycle budget and hiding
 	// the original fault.
 	MaxExceptionRun int
+
+	// Instruction execution history (saved last 40 instructions)
+	History          [40]HistoryEntry
+	HistoryIndex     int
+	HistoryFull      bool
+	RecordHistory    bool
+	currentMemAddr   uint32
+	currentMemVal    uint32
+	currentMemAccess string
 }
 
 // New creates a new CPU instance
@@ -222,20 +231,33 @@ func (c *CPU) Step() {
 		return
 	}
 
-	// Address Error check for Fetch
-	if !c.Bus.HasMapping(c.PC) {
-		c.CurrentPC = c.PC
-		c.Exception(EXC_ADEL, c.PC)
-		c.Cycles++
-		return
-	}
-
 	// The instruction about to run is a delay slot if the previous one
 	// was a taken branch.
 	c.InDelaySlot = c.branchTaken
 	c.branchTaken = false
 
 	pc := c.PC
+
+	// Address Error check for Fetch
+	if !c.Bus.HasMapping(pc) {
+		c.CurrentPC = pc
+		c.Exception(EXC_ADEL, pc)
+		if c.RecordHistory {
+			c.currentMemAddr = 0
+			c.currentMemVal = 0
+			c.currentMemAccess = ""
+			c.RecordHistoryEntry(pc, 0, c.InDelaySlot)
+		}
+		c.Cycles++
+		return
+	}
+
+	// Reset memory transaction tracking
+	c.currentMemAddr = 0
+	c.currentMemVal = 0
+	c.currentMemAccess = ""
+	inDelaySlot := c.InDelaySlot
+
 	raw := c.Fetch()
 
 	inst := Decode(raw)
@@ -252,6 +274,10 @@ func (c *CPU) Step() {
 	}
 
 	c.Execute(inst)
+
+	if c.RecordHistory {
+		c.RecordHistoryEntry(pc, raw, inDelaySlot)
+	}
 
 	c.Cycles++
 }
@@ -460,4 +486,91 @@ func ExceptionName(code uint8) string {
 		return "Tr"
 	}
 	return fmt.Sprintf("Exc%d", code)
+}
+
+type HistoryEntry struct {
+	Cycle       uint64
+	PC          uint32
+	Instruction uint32
+	MemAddr     uint32
+	MemVal      uint32
+	MemAccess   string // "R" (read) or "W" (write) or "" (none)
+	InDelaySlot bool
+}
+
+func (c *CPU) RecordHistoryEntry(pc uint32, raw uint32, inDelaySlot bool) {
+	c.History[c.HistoryIndex] = HistoryEntry{
+		Cycle:       c.Cycles,
+		PC:          pc,
+		Instruction: raw,
+		MemAddr:     c.currentMemAddr,
+		MemVal:      c.currentMemVal,
+		MemAccess:   c.currentMemAccess,
+		InDelaySlot: inDelaySlot,
+	}
+	c.HistoryIndex = (c.HistoryIndex + 1) % 40
+	if c.HistoryIndex == 0 {
+		c.HistoryFull = true
+	}
+}
+
+func (c *CPU) GetHistory() []HistoryEntry {
+	var entries []HistoryEntry
+	limit := 40
+	start := 0
+	size := c.HistoryIndex
+	if c.HistoryFull {
+		size = limit
+		start = c.HistoryIndex
+	}
+	for i := 0; i < size; i++ {
+		idx := (start + i) % limit
+		entries = append(entries, c.History[idx])
+	}
+	return entries
+}
+
+func (c *CPU) read8(addr uint32) byte {
+	val := c.Bus.Read8(addr)
+	c.currentMemAddr = addr
+	c.currentMemVal = uint32(val)
+	c.currentMemAccess = "R"
+	return val
+}
+
+func (c *CPU) write8(addr uint32, val byte) {
+	c.Bus.Write8(addr, val)
+	c.currentMemAddr = addr
+	c.currentMemVal = uint32(val)
+	c.currentMemAccess = "W"
+}
+
+func (c *CPU) read16(addr uint32) uint16 {
+	val := c.Bus.Read16(addr)
+	c.currentMemAddr = addr
+	c.currentMemVal = uint32(val)
+	c.currentMemAccess = "R"
+	return val
+}
+
+func (c *CPU) write16(addr uint32, val uint16) {
+	c.Bus.Write16(addr, val)
+	c.currentMemAddr = addr
+	c.currentMemVal = uint32(val)
+	c.currentMemAccess = "W"
+}
+
+func (c *CPU) read32(addr uint32) uint32 {
+	val := c.Bus.Read32(addr)
+	c.currentMemAddr = addr
+	c.currentMemVal = val
+	c.currentMemAccess = "R"
+	return val
+}
+
+func (c *CPU) write32(addr uint32, val uint32) {
+	c.Bus.Write32(addr, val)
+	c.currentMemAddr = addr
+	c.currentMemVal = val
+	c.currentMemAccess = "W"
 }
