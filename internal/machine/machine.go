@@ -75,6 +75,9 @@ const (
 	GMACStart uint32 = 0x134B0000
 	GMACEnd   uint32 = 0x134BFFFF
 
+	DWC2Start uint32 = 0x13500000
+	DWC2End   uint32 = 0x1350FFFF
+
 	// EFUSEStart is the one-time-programmable fuse controller, which the
 	// SPL reads for the chip identifier and DDR calibration values.
 	EFUSEStart uint32 = 0x13540000
@@ -160,6 +163,8 @@ type Machine struct {
 
 	// GMAC is the Ethernet MAC and MDIO controller.
 	GMAC *device.RegisterBlock
+
+	DWC2 *device.RegisterBlock
 
 	// EFUSE is the one-time-programmable fuse controller.
 	EFUSE *device.RegisterBlock
@@ -292,6 +297,9 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 	gmac := device.NewGMAC()
 	b.Map(GMACStart, GMACEnd, gmac)
 
+	dwc2 := device.NewDWC2()
+	b.Map(DWC2Start, DWC2End, dwc2)
+
 	efuse := device.NewEFUSE()
 	b.Map(EFUSEStart, EFUSEEnd, efuse)
 
@@ -393,6 +401,7 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 		DDRP:          ddrp,
 		SFC:           sfc,
 		GMAC:          gmac,
+		DWC2:          dwc2,
 		EFUSE:         efuse,
 		MSC:           msc0,
 		Periph:        periph,
