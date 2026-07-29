@@ -44,6 +44,45 @@ func TestSFCStartReportsTransferEnd(t *testing.T) {
 	}
 }
 
+func TestSFCTransferDoneAssertsAndClearsInterrupt(t *testing.T) {
+	sfc := NewSFC([]byte{1, 2, 3, 4}, 4)
+	asserted := false
+	sfc.Interrupt = func(assert bool) {
+		asserted = assert
+	}
+
+	sfc.Write32(SFC_TRAN_CONF, 0x05)
+	sfc.Write32(SFC_TRAN_LEN, 1)
+	sfc.Write32(SFC_TRIG, SFC_TRIG_START)
+
+	if !asserted {
+		t.Fatalf("expected SFC transfer completion to assert interrupt")
+	}
+
+	sfc.Write32(SFC_SCR, SFC_SCR_CLR_END)
+
+	if asserted {
+		t.Fatalf("expected SCR end clear to deassert interrupt")
+	}
+}
+
+func TestSFCCombinedStartStopFlushKeepsNewTransferActive(t *testing.T) {
+	sfc := NewSFC([]byte{1, 2, 3, 4}, 4)
+
+	sfc.Write32(SFC_TRAN_CONF, 0x03)
+	sfc.Write32(SFC_DEV_ADDR, 0)
+	sfc.Write32(SFC_TRAN_LEN, 4)
+	sfc.Write32(SFC_TRIG, SFC_TRIG_START|SFC_TRIG_STOP|SFC_TRIG_FLUSH)
+	sfc.Write32(SFC_SCR, SFC_SCR_CLR_RREQ|SFC_SCR_CLR_END)
+
+	if got := sfc.Read32(SFC_SR); got&SFC_SR_RECE_REQ == 0 {
+		t.Fatalf("expected combined trigger to leave receive data ready, got 0x%08X", got)
+	}
+	if got := sfc.Read32(SFC_DR); got != 0x04030201 {
+		t.Fatalf("expected flash word 0x04030201, got 0x%08X", got)
+	}
+}
+
 func TestSFCSCRClearsEndStatus(t *testing.T) {
 	sfc := NewSFC([]byte{1, 2, 3, 4}, 4)
 

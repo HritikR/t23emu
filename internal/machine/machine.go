@@ -36,6 +36,11 @@ const (
 	// registers is bit 3.
 	OSTIRQ uint8 = 3
 
+	// SFCIRQ is bank 1 bit 8 in the Ingenic interrupt controller. During
+	// Linux SFC probe the driver unmasks INTC offset 0x2c with bit 8 set,
+	// then sleeps waiting for transfer completion.
+	SFCIRQ uint8 = 40
+
 	GPIOStart uint32 = 0x10010000
 	GPIOEnd   uint32 = 0x1001FFFF
 
@@ -253,6 +258,13 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 
 	sfc := device.NewSFC(romData, sfcSize)
 	b.Map(SFCStart, SFCEnd, sfc)
+	sfc.Interrupt = func(assert bool) {
+		if assert {
+			intc.Assert(SFCIRQ)
+		} else {
+			intc.Deassert(SFCIRQ)
+		}
+	}
 
 	gmac := device.NewGMAC()
 	b.Map(GMACStart, GMACEnd, gmac)

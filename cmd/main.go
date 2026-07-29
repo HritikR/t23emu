@@ -92,11 +92,16 @@ func main() {
 
 	var executedCycles uint64
 
-	if *trace && *traceFrom > 0 {
+	traceStart := *traceFrom
+	if traceStart > *cycles {
+		traceStart = *cycles
+	}
+
+	if *trace && traceStart > 0 {
 		// Run without tracing up to the requested cycle, then trace the
 		// rest. Tracing a long boot from cycle zero buries the
 		// interesting part in setup code.
-		executedCycles = m.Run(*traceFrom)
+		executedCycles = m.Run(traceStart)
 		m.CPU.Trace = true
 		executedCycles += m.Run(*cycles - executedCycles)
 	} else {

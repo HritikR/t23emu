@@ -49,6 +49,8 @@ type SFC struct {
 	flash []byte
 	reply []byte
 
+	Interrupt func(assert bool)
+
 	command byte
 
 	active    bool
@@ -130,20 +132,23 @@ func (s *SFC) Write32(addr uint32, value uint32) {
 
 	switch offset {
 	case SFC_TRIG:
+		start := value&SFC_TRIG_START != 0
 		if value&SFC_TRIG_FLUSH != 0 {
 			s.active = false
 			s.done = false
 			s.remaining = 0
+			s.setInterrupt(false)
 		}
-		if value&SFC_TRIG_START != 0 {
+		if start {
 			s.startTransfer()
 		}
-		if value&SFC_TRIG_STOP != 0 {
+		if value&SFC_TRIG_STOP != 0 && !start {
 			s.active = false
 		}
 	case SFC_SCR:
 		if value&SFC_SCR_CLR_END != 0 {
 			s.done = false
+			s.setInterrupt(false)
 		}
 	case SFC_DR:
 		if s.active && s.remaining > 0 && s.reply == nil && !isReadCommand(s.command) {
@@ -160,6 +165,7 @@ func (s *SFC) Write32(addr uint32, value uint32) {
 				s.active = false
 				s.done = true
 				s.wel = false
+				s.setInterrupt(true)
 			}
 		}
 	}
@@ -187,6 +193,7 @@ func (s *SFC) Write8(addr uint32, value byte) {
 			s.active = false
 			s.done = true
 			s.wel = false
+			s.setInterrupt(true)
 		}
 		return
 	}
@@ -224,6 +231,7 @@ func (s *SFC) startTransfer() {
 
 	s.active = s.remaining > 0
 	s.done = true
+	s.setInterrupt(true)
 }
 
 func (s *SFC) erase(start uint32, length uint32) {
@@ -268,6 +276,7 @@ func (s *SFC) readData() uint32 {
 	if s.remaining == 0 {
 		s.active = false
 		s.done = true
+		s.setInterrupt(true)
 	}
 
 	s.completeIfFinished()
@@ -301,6 +310,13 @@ func (s *SFC) completeIfFinished() {
 
 	s.active = false
 	s.done = true
+	s.setInterrupt(true)
+}
+
+func (s *SFC) setInterrupt(assert bool) {
+	if s.Interrupt != nil {
+		s.Interrupt(assert)
+	}
 }
 
 func (s *SFC) commandReply(command byte) []byte {

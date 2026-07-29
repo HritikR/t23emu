@@ -65,6 +65,7 @@ type MSC struct {
 	diskImage  []byte
 	fifoBuffer []byte
 	fifoIndex  int
+	response   uint32
 }
 
 func NewMSC(name string, cardPresent bool, diskImage []byte) *MSC {
@@ -122,7 +123,7 @@ func (m *MSC) Read32(addr uint32) uint32 {
 		value = m.regs[MSC_IREG]
 
 	case MSC_RES:
-		value = 0
+		value = m.response
 
 	case MSC_RXFIFO:
 		if m.fifoIndex < len(m.fifoBuffer) {
@@ -222,14 +223,16 @@ func (m *MSC) writeSTRPCL(value uint32) {
 func (m *MSC) resetController() {
 	m.regs[MSC_STAT] = 0
 	m.regs[MSC_IREG] = 0
+	m.response = 0
 	m.clockRunning = false
 	m.regs[MSC_STAT] &^= MSC_STAT_IS_RESETTING
 }
 
 func (m *MSC) startCommand() {
 	if !m.cardPresent {
-		m.regs[MSC_STAT] = MSC_STAT_END_CMD_RES
-		m.regs[MSC_IREG] = MSC_IREG_END_CMD_RES
+		m.regs[MSC_STAT] = MSC_STAT_TIME_OUT_RES
+		m.regs[MSC_IREG] = MSC_IREG_TIME_OUT_RES
+		m.response = 0
 		return
 	}
 
@@ -238,8 +241,21 @@ func (m *MSC) startCommand() {
 
 	m.regs[MSC_STAT] = MSC_STAT_END_CMD_RES
 	m.regs[MSC_IREG] = MSC_IREG_END_CMD_RES
+	m.response = 0
 
 	switch cmdIndex {
+	case 8:
+		// SD_SEND_IF_COND: echo the voltage/check pattern.
+		m.response = arg & 0xFFF
+	case 41:
+		// ACMD41: report card power-up complete and mirror the accepted OCR.
+		m.response = 0x80000000 | (arg & 0x00FFFFFF)
+	case 55:
+		// APP_CMD prefix accepted.
+		m.response = 1 << 5
+	case 3:
+		// SEND_RELATIVE_ADDR: hand out RCA 1.
+		m.response = 1 << 16
 	case 17, 18: // CMD17 (Read Single Block), CMD18 (Read Multiple Block)
 		blockLen := m.regs[MSC_BLKLEN]
 		if blockLen == 0 {
