@@ -15,6 +15,7 @@ import (
 func main() {
 	romPath := flag.String("rom", "", "Path to the ROM binary image file")
 	ramSize := flag.Uint("ram", 64*1024*1024, "RAM size in bytes")
+	flashSize := flag.Uint("flash-size", 8*1024*1024, "SPI flash size in bytes")
 	cycles := flag.Uint64("cycles", 1500000000, "Maximum instruction cycles to run")
 	trace := flag.Bool("trace", false, "Enable instruction tracing to stderr")
 	traceMMIO := flag.Bool("trace-mmio", false, "Trace peripheral register accesses to stderr")
@@ -37,9 +38,9 @@ func main() {
 	}
 
 	fmt.Printf("Loading ROM: %s (%d bytes)...\n", *romPath, len(romData))
-	fmt.Printf("Initializing T23 Machine (RAM: %d bytes, Max Cycles: %d)...\n", *ramSize, *cycles)
+	fmt.Printf("Initializing T23 Machine (RAM: %d bytes, Flash: %d bytes, Max Cycles: %d)...\n", *ramSize, *flashSize, *cycles)
 
-	m := machine.New(uint32(*ramSize), romData)
+	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize))
 	if !*liveUART {
 		for _, port := range m.UARTs {
 			port.SetOutput(io.Discard)

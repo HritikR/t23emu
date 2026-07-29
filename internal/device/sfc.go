@@ -31,8 +31,7 @@ const (
 	SFC_TRIG_STOP  uint32 = 1 << 1
 	SFC_TRIG_FLUSH uint32 = 1 << 2
 
-	// SFC_SR_RECE_REQ indicates that receive data is available. The SPL
-	// polls it and then drains words from SFC_DR.
+	// SFC_SR_RECE_REQ indicates that receive data is available.
 	SFC_SR_RECE_REQ uint32 = 1 << 2
 	SFC_SR_TRAN_REQ uint32 = 1 << 3
 	SFC_SR_END      uint32 = 1 << 4
@@ -43,11 +42,7 @@ const (
 	sfcFIFOBytes uint32 = 32 * 4
 )
 
-// SFC is a small model of the Ingenic serial flash controller.
-//
-// It is intentionally narrow: the SPL only needs PIO reads from the data
-// register. Configuration registers still read back through RegisterBlock so
-// diagnostics show what the firmware programmed.
+// SFC is a model of the Ingenic serial flash controller.
 type SFC struct {
 	*RegisterBlock
 
@@ -58,16 +53,27 @@ type SFC struct {
 
 	active    bool
 	done      bool
+	wel       bool
 	addr      uint32
 	index     uint32
 	remaining uint32
 }
 
 // NewSFC creates the serial flash controller.
-func NewSFC(flash []byte) *SFC {
+// If size is 0 or smaller than len(flash), capacity defaults to len(flash).
+func NewSFC(flash []byte, size uint32) *SFC {
+	if uint32(len(flash)) > size {
+		size = uint32(len(flash))
+	}
+	buf := make([]byte, size)
+	for i := range buf {
+		buf[i] = 0xFF
+	}
+	copy(buf, flash)
+
 	sfc := &SFC{
 		RegisterBlock: NewRegisterBlock("SFC", 0x2000),
-		flash:         append([]byte(nil), flash...),
+		flash:         buf,
 	}
 
 	names := map[uint32]string{
@@ -139,6 +145,23 @@ func (s *SFC) Write32(addr uint32, value uint32) {
 		if value&SFC_SCR_CLR_END != 0 {
 			s.done = false
 		}
+	case SFC_DR:
+		if s.active && s.remaining > 0 && s.reply == nil && !isReadCommand(s.command) {
+			for i := uint32(0); i < 4 && s.remaining > 0; i++ {
+				b := byte(value >> (8 * i))
+				if s.addr < uint32(len(s.flash)) {
+					s.flash[s.addr] = b
+				}
+				s.addr++
+				s.index++
+				s.remaining--
+			}
+			if s.remaining == 0 {
+				s.active = false
+				s.done = true
+				s.wel = false
+			}
+		}
 	}
 
 	if s.Trace {
@@ -153,6 +176,20 @@ func (s *SFC) Read8(addr uint32) byte {
 
 func (s *SFC) Write8(addr uint32, value byte) {
 	offset := addr &^ 3
+	if offset == SFC_DR && s.active && s.remaining > 0 && s.reply == nil && !isReadCommand(s.command) {
+		if s.addr < uint32(len(s.flash)) {
+			s.flash[s.addr] = value
+		}
+		s.addr++
+		s.index++
+		s.remaining--
+		if s.remaining == 0 {
+			s.active = false
+			s.done = true
+			s.wel = false
+		}
+		return
+	}
 	shift := (addr & 3) * 8
 	word := s.regs[offset]
 	word = (word & ^(uint32(0xFF) << shift)) | (uint32(value) << shift)
@@ -165,14 +202,46 @@ func (s *SFC) startTransfer() {
 	s.addr = s.regs[SFC_DEV_ADDR]
 	s.index = 0
 	s.remaining = s.regs[SFC_TRAN_LEN]
+
+	switch s.command {
+	case 0x06: // Write Enable
+		s.wel = true
+	case 0x04: // Write Disable
+		s.wel = false
+	case 0x20, 0x21: // Sector Erase 4KB
+		s.erase(s.addr&^0xFFF, 4096)
+		s.wel = false
+	case 0x52: // Block Erase 32KB
+		s.erase(s.addr&^0x7FFF, 32768)
+		s.wel = false
+	case 0xD8, 0xDC: // Block Erase 64KB
+		s.erase(s.addr&^0xFFFF, 65536)
+		s.wel = false
+	case 0xC7, 0x60: // Chip Erase
+		s.erase(0, uint32(len(s.flash)))
+		s.wel = false
+	}
+
 	s.active = s.remaining > 0
 	s.done = true
+}
+
+func (s *SFC) erase(start uint32, length uint32) {
+	for i := uint32(0); i < length; i++ {
+		if start+i < uint32(len(s.flash)) {
+			s.flash[start+i] = 0xFF
+		}
+	}
 }
 
 func (s *SFC) status() uint32 {
 	value := s.regs[SFC_SR]
 	if s.active && s.remaining > 0 {
-		value |= SFC_SR_RECE_REQ
+		if !isReadCommand(s.command) && s.reply == nil {
+			value |= SFC_SR_TRAN_REQ
+		} else {
+			value |= SFC_SR_RECE_REQ
+		}
 		fifoWords := (min32(s.remaining, sfcFIFOBytes) + 3) / 4
 		value |= fifoWords << 16
 	}
@@ -236,8 +305,16 @@ func (s *SFC) completeIfFinished() {
 
 func (s *SFC) commandReply(command byte) []byte {
 	switch command {
-	case 0x05, 0x35:
-		// Read status registers. Keep WIP/WEL clear so polls complete.
+	case 0x05:
+		// Read status register 1. Return WEL bit if enabled.
+		val := byte(0x00)
+		if s.wel {
+			val |= 0x02 // WEL (Write Enable Latch)
+		}
+		return []byte{val}
+
+	case 0x35:
+		// Read status register 2.
 		return []byte{0x00}
 
 	case 0x90:
@@ -251,6 +328,15 @@ func (s *SFC) commandReply(command byte) []byte {
 
 	default:
 		return nil
+	}
+}
+
+func isReadCommand(cmd byte) bool {
+	switch cmd {
+	case 0x03, 0x13, 0x0B, 0x0C, 0x3B, 0x3C, 0x6B, 0x6C, 0xEB, 0xEC, 0x5A, 0x05, 0x35, 0x90, 0x9F:
+		return true
+	default:
+		return false
 	}
 }
 
