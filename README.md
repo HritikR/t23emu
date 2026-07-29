@@ -15,7 +15,7 @@ The emulator currently gets through:
 - PLL and DDR setup
 - U-Boot relocation to RAM
 - board info reporting as `T23N`
-- SPI flash probing as `W25Q64`
+- SPI flash probing as `P25Q64H`
 - kernel image load from flash
 - Linux decompression and entry
 - Linux delay calibration
@@ -110,6 +110,8 @@ the commit history.
 - [x] handle early timer interrupts
 - [x] support CP0 TLB mappings used by early Linux
 - [x] wake the CPU from `wait` on interrupts
+- [ ] uncompressing kernel image on host using `xz`
+- [ ] virtual fat32 filesystem for mmc
 - [ ] boot fully to userspace shell
 - [ ] model real TCU/OST compare interrupt timing
 - [ ] model more peripherals instead of generic register stubs
