@@ -2,6 +2,7 @@ package machine
 
 import (
 	"fmt"
+
 	"github.com/HritikR/t23emu/internal/bus"
 	"github.com/HritikR/t23emu/internal/cpu"
 	"github.com/HritikR/t23emu/internal/device"
@@ -104,6 +105,9 @@ const (
 	// firmware returned to its caller, which the machine reports rather
 	// than letting the core execute whatever happens to be there.
 	BootROMReturn uint32 = 0xbfc0f000
+
+	MSC0Start uint32 = 0x13450000
+	MSC0End   uint32 = 0x1345FFFF
 )
 
 type Machine struct {
@@ -153,6 +157,8 @@ type Machine struct {
 
 	// EFUSE is the one-time-programmable fuse controller.
 	EFUSE *device.RegisterBlock
+
+	MSC *device.MSC
 
 	// Periph is the catch-all covering peripherals with no model yet.
 	// Anything it records is a peripheral the emulator still needs.
@@ -237,6 +243,10 @@ func New(ramSize uint32, romData []byte) *Machine {
 
 	ddrp := device.NewDDRP()
 	b.Map(DDRPStart, DDRPEnd, ddrp)
+
+	emptyImage := make([]byte, 1024*1024)
+	msc0 := device.NewMSC("MSC0", true, emptyImage)
+	b.Map(MSC0Start, MSC0End, msc0)
 
 	sfc := device.NewSFC(romData)
 	b.Map(SFCStart, SFCEnd, sfc)
@@ -331,6 +341,7 @@ func New(ramSize uint32, romData []byte) *Machine {
 		SFC:           sfc,
 		GMAC:          gmac,
 		EFUSE:         efuse,
+		MSC:           msc0,
 		Periph:        periph,
 		Bus:           b,
 		BootROMReturn: BootROMReturn,

@@ -74,6 +74,7 @@ func main() {
 		"SFC":    m.SFC.RegisterBlock,
 		"GMAC":   m.GMAC,
 		"EFUSE":  m.EFUSE,
+		"MSC":    m.MSC.RegisterBlock,
 		"PERIPH": m.Periph,
 	}
 
@@ -157,7 +158,7 @@ func reportPeripherals(blocks map[string]*device.RegisterBlock) {
 
 	const pollThreshold = 100
 
-	for _, name := range []string{"CPM", "INTC", "TCU", "OST", "GPIO", "I2C0", "DDRC", "DDRP", "SFC", "GMAC", "EFUSE", "PERIPH"} {
+	for _, name := range []string{"CPM", "INTC", "TCU", "OST", "GPIO", "I2C0", "DDRC", "DDRP", "SFC", "GMAC", "EFUSE", "MSC", "PERIPH"} {
 		block := blocks[name]
 
 		written := block.Written()
