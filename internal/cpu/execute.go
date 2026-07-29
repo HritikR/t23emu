@@ -893,7 +893,11 @@ func (c *CPU) checkLoad(addr uint32, align uint32) bool {
 	}
 	if !c.Bus.HasMapping(addr) {
 		if isTLBMappedSegment(addr) {
-			c.Exception(EXC_TLBL, addr)
+			if _, _, index := c.lookupTLB(addr, false); index >= 0 {
+				c.exceptionNoRefill(EXC_TLBL, addr)
+			} else {
+				c.Exception(EXC_TLBL, addr)
+			}
 			return false
 		}
 		c.Exception(EXC_ADEL, addr)
@@ -910,7 +914,11 @@ func (c *CPU) checkStore(addr uint32, align uint32) bool {
 	}
 	if !c.Bus.HasMapping(addr) {
 		if isTLBMappedSegment(addr) {
-			c.Exception(EXC_TLBS, addr)
+			if _, _, index := c.lookupTLB(addr, true); index >= 0 {
+				c.exceptionNoRefill(EXC_TLBS, addr)
+			} else {
+				c.Exception(EXC_TLBS, addr)
+			}
 			return false
 		}
 		c.Exception(EXC_ADES, addr)

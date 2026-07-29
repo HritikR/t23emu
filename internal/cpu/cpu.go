@@ -384,6 +384,14 @@ func (c *CPU) nullifyDelaySlot() {
 // Exception handles CPU exception processing: updates Cause, EPC, Status EXL,
 // BadVAddr and jumps to the exception vector.
 func (c *CPU) Exception(code uint8, badVAddr uint32) {
+	c.exception(code, badVAddr, true)
+}
+
+func (c *CPU) exceptionNoRefill(code uint8, badVAddr uint32) {
+	c.exception(code, badVAddr, false)
+}
+
+func (c *CPU) exception(code uint8, badVAddr uint32, allowRefill bool) {
 
 	c.exceptionRun++
 	if c.MaxExceptionRun > 0 && c.exceptionRun > c.MaxExceptionRun {
@@ -396,7 +404,7 @@ func (c *CPU) Exception(code uint8, badVAddr uint32) {
 	}
 
 	status := c.CP0[CP0_STATUS]
-	refill := (code == EXC_TLBL || code == EXC_TLBS) && status&STATUS_EXL == 0
+	refill := allowRefill && (code == EXC_TLBL || code == EXC_TLBS) && status&STATUS_EXL == 0
 
 	if code == EXC_ADEL || code == EXC_ADES || code == EXC_TLBL || code == EXC_TLBS {
 		c.CP0[CP0_BADVADDR] = badVAddr
