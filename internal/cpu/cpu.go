@@ -253,7 +253,7 @@ func (c *CPU) Step() {
 	// Address Error check for Fetch
 	if !c.Bus.HasMapping(pc) {
 		c.CurrentPC = pc
-		if isTLBMappedSegment(pc) {
+		if c.requiresTLB(pc) {
 			if _, _, index := c.lookupTLB(pc, false); index >= 0 {
 				c.exceptionNoRefill(EXC_TLBL, pc)
 			} else {

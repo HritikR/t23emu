@@ -21,6 +21,9 @@ const (
 
 // TranslateAddress applies the fixed unmapped kernel segments and the CP0 TLB.
 func (c *CPU) TranslateAddress(addr uint32) (uint32, bool) {
+	if addr < 0x80000000 && c.CP0[CP0_STATUS]&STATUS_ERL != 0 {
+		return addr, true
+	}
 	if addr >= 0x80000000 && addr < 0xC0000000 {
 		return addr & 0x1FFFFFFF, true
 	}
@@ -36,6 +39,13 @@ func (c *CPU) TranslateAddress(addr uint32) (uint32, bool) {
 
 func isTLBMappedSegment(addr uint32) bool {
 	return addr < 0x80000000 || (addr >= 0xC0000000 && addr < 0xE0000000)
+}
+
+func (c *CPU) requiresTLB(addr uint32) bool {
+	if addr < 0x80000000 && c.CP0[CP0_STATUS]&STATUS_ERL != 0 {
+		return false
+	}
+	return isTLBMappedSegment(addr)
 }
 
 func (c *CPU) updateTLBExceptionState(badVAddr uint32) {

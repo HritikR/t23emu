@@ -224,6 +224,7 @@ func TestKusegRequiresTLBMapping(t *testing.T) {
 	b.Map(0, 0x1FFF, ram)
 
 	cpu := New(b)
+	cpu.CP0[CP0_STATUS] &^= STATUS_ERL
 	b.SetTranslator(cpu.TranslateAddress)
 
 	if b.HasMapping(0x1000) {
@@ -238,6 +239,24 @@ func TestKusegRequiresTLBMapping(t *testing.T) {
 
 	if !b.HasMapping(0x1000) {
 		t.Fatalf("expected kuseg address with TLB entry to be mapped")
+	}
+}
+
+func TestKusegERLMapsPhysical(t *testing.T) {
+	ram := memory.NewRAM(0x2000)
+	b := bus.New()
+	b.Map(0, 0x1FFF, ram)
+
+	cpu := New(b)
+	b.SetTranslator(cpu.TranslateAddress)
+
+	if !b.HasMapping(0x1000) {
+		t.Fatalf("expected ERL kuseg address to map as physical")
+	}
+
+	cpu.CP0[CP0_STATUS] &^= STATUS_ERL
+	if b.HasMapping(0x1000) {
+		t.Fatalf("expected kuseg address without ERL or TLB entry to be unmapped")
 	}
 }
 
