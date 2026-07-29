@@ -950,15 +950,27 @@ func (c *CPU) checkStore(addr uint32, align uint32) bool {
 		c.Exception(EXC_ADES, addr)
 		return false
 	}
-	if !c.Bus.HasMapping(addr) {
-		if isTLBMappedSegment(addr) {
-			if _, _, index := c.lookupTLB(addr, true); index >= 0 {
-				c.exceptionNoRefill(EXC_TLBS, addr)
+	if isTLBMappedSegment(addr) {
+		if _, ok, index := c.lookupTLB(addr, true); !ok {
+			if index >= 0 {
+				entryLo := c.TLB[index].entryLo(addr)
+				if entryLo&entryLoV != 0 && entryLo&entryLoD == 0 {
+					c.Exception(EXC_MOD, addr)
+				} else {
+					c.exceptionNoRefill(EXC_TLBS, addr)
+				}
 			} else {
 				c.Exception(EXC_TLBS, addr)
 			}
 			return false
 		}
+		if !c.Bus.HasMapping(addr) {
+			c.Exception(EXC_ADES, addr)
+			return false
+		}
+		return true
+	}
+	if !c.Bus.HasMapping(addr) {
 		c.Exception(EXC_ADES, addr)
 		return false
 	}

@@ -336,6 +336,33 @@ func TestKseg2InvalidStoreRaisesTLBSGeneralException(t *testing.T) {
 	}
 }
 
+func TestTLBStoreToCleanPageRaisesMod(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	cpu.CP0[CP0_STATUS] = 0
+	cpu.CP0[CP0_INDEX] = 0
+	cpu.CP0[CP0_ENTRYHI] = 0x00400000
+	cpu.CP0[CP0_ENTRYLO0] = entryLoV | entryLoG
+	cpu.CP0[CP0_ENTRYLO1] = (1 << 6) | entryLoV | entryLoG
+	cpu.writeIndexedTLB(0)
+
+	cpu.PC = 0x80020000
+	cpu.CurrentPC = cpu.PC
+	cpu.WriteRegister(1, 0x00400000)
+	cpu.WriteRegister(2, 0x12345678)
+
+	cpu.Execute(Instruction{Opcode: OP_SW, Rs: 1, Rt: 2})
+
+	if got := (cpu.CP0[CP0_CAUSE] >> 2) & 0x1F; got != uint32(EXC_MOD) {
+		t.Fatalf("expected Mod exception, got %d", got)
+	}
+	if cpu.CP0[CP0_BADVADDR] != 0x00400000 {
+		t.Fatalf("expected BadVAddr 00400000, got 0x%08X", cpu.CP0[CP0_BADVADDR])
+	}
+	if got := ram.Read32(0); got != 0 {
+		t.Fatalf("clean TLB store wrote through before Mod handling: 0x%08X", got)
+	}
+}
+
 func TestKusegFetchMissRaisesTLBLRefill(t *testing.T) {
 	cpu := createTestCPU()
 	cpu.CP0[CP0_STATUS] = 0

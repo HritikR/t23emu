@@ -425,7 +425,7 @@ func (c *CPU) exception(code uint8, badVAddr uint32, allowRefill bool) {
 	status := c.CP0[CP0_STATUS]
 	refill := allowRefill && (code == EXC_TLBL || code == EXC_TLBS) && status&STATUS_EXL == 0
 
-	if code == EXC_ADEL || code == EXC_ADES || code == EXC_TLBL || code == EXC_TLBS {
+	if code == EXC_MOD || code == EXC_ADEL || code == EXC_ADES || code == EXC_TLBL || code == EXC_TLBS {
 		c.updateTLBExceptionState(badVAddr)
 	}
 
