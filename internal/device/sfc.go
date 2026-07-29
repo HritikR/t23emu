@@ -220,6 +220,20 @@ func (s *SFC) Write32(addr uint32, value uint32) {
 }
 
 func (s *SFC) Read8(addr uint32) byte {
+	offset := addr &^ 3
+	if offset == SFC_DR {
+		s.readCounts[offset]++
+		if s.remaining == 0 {
+			return 0
+		}
+		value, _ := s.readByte()
+		s.addr++
+		s.index++
+		s.remaining--
+		s.completeIfFinished()
+		return value
+	}
+
 	word := s.Read32(addr &^ 3)
 	return byte(word >> ((addr & 3) * 8))
 }

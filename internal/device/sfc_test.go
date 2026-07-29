@@ -31,6 +31,24 @@ func TestSFCDataReadsFromFlashAndCompletes(t *testing.T) {
 	}
 }
 
+func TestSFCDataByteReadsConsumeOneByte(t *testing.T) {
+	sfc := NewSFC([]byte{0x11, 0x22, 0x33, 0x44}, 4)
+
+	sfc.Write32(SFC_TRAN_CONF, 0x03)
+	sfc.Write32(SFC_DEV_ADDR, 0)
+	sfc.Write32(SFC_TRAN_LEN, 4)
+	sfc.Write32(SFC_TRIG, SFC_TRIG_START)
+
+	for i, want := range []byte{0x11, 0x22, 0x33, 0x44} {
+		if got := sfc.Read8(SFC_DR); got != want {
+			t.Fatalf("byte %d: expected 0x%02X, got 0x%02X", i, want, got)
+		}
+	}
+	if got := sfc.Read32(SFC_SR); got&SFC_SR_RECE_REQ != 0 || got&SFC_SR_END == 0 {
+		t.Fatalf("expected byte reads to complete transfer, got 0x%08X", got)
+	}
+}
+
 func TestSFCStartReportsTransferEnd(t *testing.T) {
 	sfc := NewSFC([]byte{1, 2, 3, 4}, 4)
 
