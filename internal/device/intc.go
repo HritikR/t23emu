@@ -1,6 +1,9 @@
 package device
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 // Ingenic interrupt controller register offsets. The controller is split into
 // banks of 32 IRQs. Bank 0 starts at 0x00, bank 1 at 0x20.
@@ -21,11 +24,15 @@ type INTC struct {
 
 	pending [intcBanks]uint32
 	mask    [intcBanks]uint32
+
+	debug      bool
+	debugLines int
 }
 
 func NewINTC() *INTC {
 	intc := &INTC{
 		RegisterBlock: NewRegisterBlock("INTC", 0x1000),
+		debug:         os.Getenv("T23EMU_TRACE_SFC_IRQ") != "",
 	}
 	for bank := range intc.mask {
 		intc.mask[bank] = ^uint32(0)
@@ -57,9 +64,9 @@ func (i *INTC) Read32(addr uint32) uint32 {
 	} else {
 		switch reg {
 		case INTC_ISR:
-			value = i.pending[bank] &^ i.mask[bank]
-		case INTC_IPR:
 			value = i.pending[bank]
+		case INTC_IPR:
+			value = i.pending[bank] &^ i.mask[bank]
 		case INTC_IMR:
 			value = i.mask[bank]
 		default:
@@ -69,6 +76,10 @@ func (i *INTC) Read32(addr uint32) uint32 {
 
 	if i.Trace {
 		fmt.Fprintf(i.Out, "  %s read  %s => 0x%08x\n", i.Name, i.RegName(offset), value)
+	}
+	if i.shouldDebug(offset, value) {
+		i.debugf("read  %-5s => 0x%08x mask0=0x%08x mask1=0x%08x pend0=0x%08x pend1=0x%08x",
+			i.RegName(offset), value, i.mask[0], i.mask[1], i.pending[0], i.pending[1])
 	}
 
 	return value
@@ -102,13 +113,34 @@ func (i *INTC) Write32(addr uint32, value uint32) {
 	if i.Trace {
 		fmt.Fprintf(i.Out, "  %s write %s <= 0x%08x\n", i.Name, i.RegName(offset), value)
 	}
+	if i.shouldDebug(offset, value) {
+		i.debugf("write %-5s <= 0x%08x mask0=0x%08x mask1=0x%08x pend0=0x%08x pend1=0x%08x",
+			i.RegName(offset), value, i.mask[0], i.mask[1], i.pending[0], i.pending[1])
+	}
 }
 
 func (i *INTC) Assert(irq uint8) {
 	bank, bit, ok := irqBankBit(irq)
 	if ok {
 		i.pending[bank] |= bit
+		if irq == 7 {
+			i.debugf("assert irq=%d mask0=0x%08x mask1=0x%08x pend0=0x%08x pend1=0x%08x",
+				irq, i.mask[0], i.mask[1], i.pending[0], i.pending[1])
+		}
 	}
+}
+
+func (i *INTC) shouldDebug(offset uint32, value uint32) bool {
+	const sfcMask = uint32(1) << 7
+	return value&sfcMask != 0 || i.pending[0]&sfcMask != 0
+}
+
+func (i *INTC) debugf(format string, args ...any) {
+	if !i.debug || i.debugLines >= 1000 {
+		return
+	}
+	i.debugLines++
+	fmt.Fprintf(i.Out, "[intc] "+format+"\n", args...)
 }
 
 func (i *INTC) Pending() uint32 {

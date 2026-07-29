@@ -2,6 +2,7 @@ package machine
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/HritikR/t23emu/internal/bus"
 	"github.com/HritikR/t23emu/internal/cpu"
@@ -36,10 +37,10 @@ const (
 	// registers is bit 3.
 	OSTIRQ uint8 = 3
 
-	// SFCIRQ is bank 1 bit 8 in the Ingenic interrupt controller. During
-	// Linux SFC probe the driver unmasks INTC offset 0x2c with bit 8 set,
-	// then sleeps waiting for transfer completion.
-	SFCIRQ uint8 = 40
+	// SFCIRQ is the INTC hardware bit that maps to Linux IRQ 15. The
+	// decompressed jz-sfc platform resource lists IRQ 15, and the Ingenic
+	// bank-0 dispatcher adds 8 to the pending bit index before do_IRQ().
+	SFCIRQ uint8 = 7
 
 	GPIOStart uint32 = 0x10010000
 	GPIOEnd   uint32 = 0x1001FFFF
@@ -258,12 +259,34 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 
 	sfc := device.NewSFC(romData, sfcSize)
 	b.Map(SFCStart, SFCEnd, sfc)
+	traceSFCIRQ := os.Getenv("T23EMU_TRACE_SFC_IRQ") != ""
+	traceSFCIRQLines := 0
+	traceSFCIRQf := func(format string, args ...any) {
+		if !traceSFCIRQ || traceSFCIRQLines >= 1000 {
+			return
+		}
+		traceSFCIRQLines++
+		fmt.Fprintf(os.Stderr, "[sfc-irq] "+format+"\n", args...)
+	}
+	sfcIRQPendingMask := uint32(1) << (SFCIRQ % 32)
+	var lastSFCIRQPend uint32
+	sfc.DMAWrite = func(addr uint32, data []byte) {
+		for i, value := range data {
+			target := addr + uint32(i)
+			if target >= ram.Size() {
+				break
+			}
+			ram.Write8(target, value)
+		}
+		traceSFCIRQf("dma-write addr=0x%08x len=%d data=% x", addr, len(data), data)
+	}
 	sfc.Interrupt = func(assert bool) {
 		if assert {
 			intc.Assert(SFCIRQ)
 		} else {
 			intc.Deassert(SFCIRQ)
 		}
+		traceSFCIRQf("line assert=%v irq=%d raw=0x%08x pending=%d", assert, SFCIRQ, intc.RawPending(), intc.Pending())
 	}
 
 	gmac := device.NewGMAC()
@@ -299,6 +322,9 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 	}
 
 	c := cpu.New(b)
+	sfc.TraceContext = func() (uint32, uint64) {
+		return c.PC, c.Cycles
+	}
 
 	cpuCycles = func() uint64 { return c.Cycles }
 
@@ -316,7 +342,17 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 	}
 	c.InterruptPending = func() uint32 {
 		assertTimer()
+		rawPending := intc.RawPending()
 		if intc.Pending() != 0 {
+			if rawPending&sfcIRQPendingMask != 0 {
+				if rawPending != lastSFCIRQPend {
+					traceSFCIRQf("cpu-ip2 raw=0x%08x status=0x%08x cause=0x%08x", rawPending, c.CP0[cpu.CP0_STATUS], c.CP0[cpu.CP0_CAUSE])
+					lastSFCIRQPend = rawPending
+				}
+			} else if lastSFCIRQPend != 0 {
+				traceSFCIRQf("cpu-ip2-clear raw=0x%08x status=0x%08x cause=0x%08x", rawPending, c.CP0[cpu.CP0_STATUS], c.CP0[cpu.CP0_CAUSE])
+				lastSFCIRQPend = 0
+			}
 			return cpu.CAUSE_IP2
 		}
 		return 0

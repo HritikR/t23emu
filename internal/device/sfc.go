@@ -2,6 +2,8 @@ package device
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 )
 
 // Ingenic Serial Flash Controller register offsets, relative to the SFC
@@ -36,6 +38,13 @@ const (
 	SFC_SR_TRAN_REQ uint32 = 1 << 3
 	SFC_SR_END      uint32 = 1 << 4
 
+	SFC_IRQ_UNDER uint32 = 1 << 0
+	SFC_IRQ_OVER  uint32 = 1 << 1
+	SFC_IRQ_RREQ  uint32 = 1 << 2
+	SFC_IRQ_TREQ  uint32 = 1 << 3
+	SFC_IRQ_END   uint32 = 1 << 4
+	SFC_IRQ_ALL   uint32 = SFC_IRQ_UNDER | SFC_IRQ_OVER | SFC_IRQ_RREQ | SFC_IRQ_TREQ | SFC_IRQ_END
+
 	SFC_SCR_CLR_RREQ uint32 = 1 << 2
 	SFC_SCR_CLR_END  uint32 = 1 << 4
 
@@ -49,7 +58,9 @@ type SFC struct {
 	flash []byte
 	reply []byte
 
-	Interrupt func(assert bool)
+	Interrupt    func(assert bool)
+	DMAWrite     func(addr uint32, data []byte)
+	TraceContext func() (pc uint32, cycles uint64)
 
 	command byte
 
@@ -59,6 +70,16 @@ type SFC struct {
 	addr      uint32
 	index     uint32
 	remaining uint32
+	pending   uint32
+
+	debug      bool
+	debugLines int
+	irqState   bool
+	irqKnown   bool
+
+	sfcTrace      bool
+	sfcTraceLines int
+	sfcTraceLimit int
 }
 
 // NewSFC creates the serial flash controller.
@@ -76,7 +97,11 @@ func NewSFC(flash []byte, size uint32) *SFC {
 	sfc := &SFC{
 		RegisterBlock: NewRegisterBlock("SFC", 0x2000),
 		flash:         buf,
+		debug:         os.Getenv("T23EMU_TRACE_SFC_IRQ") != "",
+		sfcTrace:      os.Getenv("T23EMU_TRACE_SFC") != "",
+		sfcTraceLimit: envInt("T23EMU_TRACE_SFC_LINES", 20000),
 	}
+	sfc.regs[SFC_INTC] = SFC_IRQ_ALL
 
 	names := map[uint32]string{
 		SFC_GLB:           "GLB",
@@ -121,6 +146,7 @@ func (s *SFC) Read32(addr uint32) uint32 {
 	if s.Trace {
 		fmt.Fprintf(s.Out, "  %s read  %s => 0x%08x\n", s.Name, s.RegName(offset), value)
 	}
+	s.traceAccess("read ", offset, value)
 
 	return value
 }
@@ -131,25 +157,38 @@ func (s *SFC) Write32(addr uint32, value uint32) {
 	s.regs[offset] = value
 
 	switch offset {
+	case SFC_TRAN_CONF, SFC_TRAN_LEN, SFC_DEV_ADDR, SFC_MEM_ADDR, SFC_TRIG, SFC_SCR, SFC_INTC:
+		if offset != SFC_SCR || value != SFC_SCR_CLR_RREQ {
+			s.debugf("write %-9s <= 0x%08x", s.RegName(offset), value)
+		}
+	}
+
+	switch offset {
 	case SFC_TRIG:
 		start := value&SFC_TRIG_START != 0
 		if value&SFC_TRIG_FLUSH != 0 {
 			s.active = false
 			s.done = false
 			s.remaining = 0
-			s.setInterrupt(false)
+			s.pending = 0
+			s.updateInterrupt()
 		}
 		if start {
 			s.startTransfer()
 		}
 		if value&SFC_TRIG_STOP != 0 && !start {
 			s.active = false
+			s.updateInterrupt()
 		}
 	case SFC_SCR:
+		s.pending &^= value & SFC_IRQ_ALL
 		if value&SFC_SCR_CLR_END != 0 {
 			s.done = false
-			s.setInterrupt(false)
 		}
+		s.updateInterrupt()
+	case SFC_INTC:
+		s.regs[SFC_INTC] = value & SFC_IRQ_ALL
+		s.updateInterrupt()
 	case SFC_DR:
 		if s.active && s.remaining > 0 && s.reply == nil && !isReadCommand(s.command) {
 			for i := uint32(0); i < 4 && s.remaining > 0; i++ {
@@ -165,7 +204,8 @@ func (s *SFC) Write32(addr uint32, value uint32) {
 				s.active = false
 				s.done = true
 				s.wel = false
-				s.setInterrupt(true)
+				s.pending |= SFC_IRQ_END
+				s.updateInterrupt()
 			}
 		}
 	}
@@ -173,6 +213,7 @@ func (s *SFC) Write32(addr uint32, value uint32) {
 	if s.Trace {
 		fmt.Fprintf(s.Out, "  %s write %s <= 0x%08x\n", s.Name, s.RegName(offset), value)
 	}
+	s.traceAccess("write", offset, value)
 }
 
 func (s *SFC) Read8(addr uint32) byte {
@@ -193,7 +234,8 @@ func (s *SFC) Write8(addr uint32, value byte) {
 			s.active = false
 			s.done = true
 			s.wel = false
-			s.setInterrupt(true)
+			s.pending |= SFC_IRQ_END
+			s.updateInterrupt()
 		}
 		return
 	}
@@ -209,6 +251,10 @@ func (s *SFC) startTransfer() {
 	s.addr = s.regs[SFC_DEV_ADDR]
 	s.index = 0
 	s.remaining = s.regs[SFC_TRAN_LEN]
+	s.debugf("start cmd=0x%02x len=%d dev_addr=0x%08x mem_addr=0x%08x intc=0x%08x",
+		s.command, s.remaining, s.addr, s.regs[SFC_MEM_ADDR], s.regs[SFC_INTC])
+	s.tracef("start cmd=0x%02x len=%d dev_addr=0x%08x mem_addr=0x%08x tran_conf=0x%08x intc=0x%08x",
+		s.command, s.remaining, s.addr, s.regs[SFC_MEM_ADDR], s.regs[SFC_TRAN_CONF], s.regs[SFC_INTC])
 
 	switch s.command {
 	case 0x06: // Write Enable
@@ -230,8 +276,41 @@ func (s *SFC) startTransfer() {
 	}
 
 	s.active = s.remaining > 0
+	s.tryDMARead()
 	s.done = true
-	s.setInterrupt(true)
+	if s.active && s.remaining > 0 {
+		if !isReadCommand(s.command) && s.reply == nil {
+			s.pending |= SFC_IRQ_TREQ
+		} else {
+			s.pending |= SFC_IRQ_RREQ
+		}
+	}
+	s.pending |= SFC_IRQ_END
+	s.updateInterrupt()
+}
+
+func (s *SFC) tryDMARead() {
+	if s.DMAWrite == nil || !s.active || s.remaining == 0 || !isReadCommand(s.command) {
+		return
+	}
+
+	memAddr := s.regs[SFC_MEM_ADDR]
+	if memAddr == 0 {
+		return
+	}
+
+	data := make([]byte, s.remaining)
+	for i := range data {
+		if b, ok := s.readByte(); ok {
+			data[i] = b
+		}
+		s.addr++
+		s.index++
+	}
+	s.remaining = 0
+	s.active = false
+	s.debugf("dma-read addr=0x%08x len=%d data=% x", memAddr, len(data), data)
+	s.DMAWrite(memAddr, data)
 }
 
 func (s *SFC) erase(start uint32, length uint32) {
@@ -256,11 +335,14 @@ func (s *SFC) status() uint32 {
 	if s.done {
 		value |= SFC_SR_END
 	}
-	return value
+	return value | s.pending
 }
 
 func (s *SFC) readData() uint32 {
 	var value uint32
+	if s.remaining == 0 {
+		return value
+	}
 	for i := uint32(0); i < 4; i++ {
 		if s.remaining == 0 {
 			break
@@ -276,7 +358,9 @@ func (s *SFC) readData() uint32 {
 	if s.remaining == 0 {
 		s.active = false
 		s.done = true
-		s.setInterrupt(true)
+		s.pending &^= SFC_IRQ_RREQ
+		s.pending |= SFC_IRQ_END
+		s.updateInterrupt()
 	}
 
 	s.completeIfFinished()
@@ -301,6 +385,9 @@ func (s *SFC) completeIfFinished() {
 	if s.reply != nil && s.command != 0x05 && s.command != 0x35 && s.index >= uint32(len(s.reply)) {
 		s.active = false
 		s.done = true
+		s.pending &^= SFC_IRQ_RREQ
+		s.pending |= SFC_IRQ_END
+		s.updateInterrupt()
 		return
 	}
 
@@ -310,13 +397,59 @@ func (s *SFC) completeIfFinished() {
 
 	s.active = false
 	s.done = true
-	s.setInterrupt(true)
+	s.pending &^= SFC_IRQ_RREQ
+	s.pending |= SFC_IRQ_END
+	s.updateInterrupt()
 }
 
-func (s *SFC) setInterrupt(assert bool) {
+func (s *SFC) updateInterrupt() {
+	assert := s.pending&^s.regs[SFC_INTC] != 0
+	if s.irqKnown && s.irqState == assert {
+		return
+	}
+
+	s.irqKnown = true
+	s.irqState = assert
+	s.debugf("irq pending=0x%08x mask=0x%08x assert=%v", s.pending, s.regs[SFC_INTC], assert)
 	if s.Interrupt != nil {
 		s.Interrupt(assert)
 	}
+}
+
+func (s *SFC) debugf(format string, args ...any) {
+	if !s.debug || s.debugLines >= 1000 {
+		return
+	}
+	s.debugLines++
+	fmt.Fprintf(s.Out, "[sfc] "+format+"\n", args...)
+}
+
+func (s *SFC) traceAccess(op string, offset uint32, value uint32) {
+	if !s.sfcTrace {
+		return
+	}
+	switch offset {
+	case SFC_TRAN_CONF, SFC_TRAN_LEN, SFC_DEV_ADDR, SFC_DEV_ADDR_PLUS, SFC_MEM_ADDR, SFC_TRIG, SFC_SR, SFC_SCR, SFC_INTC:
+		s.tracef("%s %-13s value=0x%08x cmd=0x%02x len=%d addr=0x%08x index=%d remaining=%d pending=0x%08x",
+			op, s.RegName(offset), value, s.command, s.regs[SFC_TRAN_LEN], s.addr, s.index, s.remaining, s.pending)
+	case SFC_DR:
+		if s.command != 0x03 || s.index <= 32 || s.remaining <= 64 || s.index%4096 == 0 {
+			s.tracef("%s %-13s value=0x%08x cmd=0x%02x len=%d addr=0x%08x index=%d remaining=%d pending=0x%08x",
+				op, s.RegName(offset), value, s.command, s.regs[SFC_TRAN_LEN], s.addr, s.index, s.remaining, s.pending)
+		}
+	}
+}
+
+func (s *SFC) tracef(format string, args ...any) {
+	if !s.sfcTrace || s.sfcTraceLines >= s.sfcTraceLimit {
+		return
+	}
+	s.sfcTraceLines++
+	pc, cycles := uint32(0), uint64(0)
+	if s.TraceContext != nil {
+		pc, cycles = s.TraceContext()
+	}
+	fmt.Fprintf(s.Out, "[sfc-trace cycle=%d pc=0x%08x] "+format+"\n", append([]any{cycles, pc}, args...)...)
 }
 
 func (s *SFC) commandReply(command byte) []byte {
@@ -361,6 +494,18 @@ func min32(a, b uint32) uint32 {
 		return a
 	}
 	return b
+}
+
+func envInt(name string, fallback int) int {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 var _ Device = (*SFC)(nil)

@@ -51,6 +51,7 @@ func TestSFCTransferDoneAssertsAndClearsInterrupt(t *testing.T) {
 		asserted = assert
 	}
 
+	sfc.Write32(SFC_INTC, ^SFC_IRQ_END)
 	sfc.Write32(SFC_TRAN_CONF, 0x05)
 	sfc.Write32(SFC_TRAN_LEN, 1)
 	sfc.Write32(SFC_TRIG, SFC_TRIG_START)
@@ -63,6 +64,32 @@ func TestSFCTransferDoneAssertsAndClearsInterrupt(t *testing.T) {
 
 	if asserted {
 		t.Fatalf("expected SCR end clear to deassert interrupt")
+	}
+}
+
+func TestSFCInterruptMaskControlsPendingStatus(t *testing.T) {
+	sfc := NewSFC([]byte{1, 2, 3, 4}, 4)
+	asserted := false
+	sfc.Interrupt = func(assert bool) {
+		asserted = assert
+	}
+
+	sfc.Write32(SFC_TRAN_CONF, 0x9f)
+	sfc.Write32(SFC_TRAN_LEN, 3)
+	sfc.Write32(SFC_TRIG, SFC_TRIG_START)
+
+	if asserted {
+		t.Fatalf("expected reset interrupt mask to suppress pending SFC interrupt")
+	}
+
+	sfc.Write32(SFC_INTC, ^SFC_IRQ_END)
+	if !asserted {
+		t.Fatalf("expected unmasking pending END to assert interrupt")
+	}
+
+	sfc.Write32(SFC_INTC, SFC_IRQ_ALL)
+	if asserted {
+		t.Fatalf("expected masking all SFC causes to deassert interrupt")
 	}
 }
 
@@ -108,6 +135,31 @@ func TestSFCReadJEDECID(t *testing.T) {
 
 	if got := sfc.Read32(SFC_DR); got != 0x00176085 {
 		t.Fatalf("expected JEDEC ID word 0x00176085, got 0x%08X", got)
+	}
+}
+
+func TestSFCDMAReadJEDECID(t *testing.T) {
+	sfc := NewSFC([]byte{0x06, 0, 0, 0}, 4)
+	var addr uint32
+	var data []byte
+	sfc.DMAWrite = func(a uint32, d []byte) {
+		addr = a
+		data = append([]byte(nil), d...)
+	}
+
+	sfc.Write32(SFC_MEM_ADDR, 0x100)
+	sfc.Write32(SFC_TRAN_CONF, 0x9f)
+	sfc.Write32(SFC_TRAN_LEN, 3)
+	sfc.Write32(SFC_TRIG, SFC_TRIG_START)
+
+	if addr != 0x100 {
+		t.Fatalf("expected DMA write to 0x100, got 0x%08X", addr)
+	}
+	if len(data) != 3 || data[0] != 0x85 || data[1] != 0x60 || data[2] != 0x17 {
+		t.Fatalf("expected JEDEC ID bytes 85 60 17, got % x", data)
+	}
+	if got := sfc.Read32(SFC_SR); got&SFC_SR_RECE_REQ != 0 || got&SFC_SR_END == 0 {
+		t.Fatalf("expected DMA read to complete with END only, got 0x%08X", got)
 	}
 }
 
