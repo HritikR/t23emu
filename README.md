@@ -25,16 +25,19 @@ The emulator currently gets through:
 - SFC interrupt completion
 - Linux JEDEC readback: `the id code = 856017, the flash name is P25Q64H`
 - MTD partition creation from the kernel command line
+- DWC2 USB OTG controller initialization
+- GMAC reset and MDIO MII bus probing (expected "no PHY" result)
+- Mounting squashfs rootfs from NOR flash partition
+- I2C master controller and SC2336 camera sensor detection
+- Core drivers probe completion (TX-ISP, audio codec, MMC, and RTC)
 
-It does not boot to userspace yet. The next big job is making the later storage
-and peripheral paths believable enough for the kernel to mount rootfs and run
-`/linuxrc`.
+It does not run userspace successfully yet. The next big job is resolving the final CPU exception or instruction issues preventing `/linuxrc` from starting and completing initialization.
 
 ## hardware model
 
-- MIPS/XBurst-style CPU interpreter
+- MIPS/XBurst-style CPU interpreter (including UserLocal, COP1, and unaligned/rotate instructions)
 - branch delay slots
-- CP0 exception, interrupt, timer, and TLB behavior
+- CP0 exception, interrupt, timer, TLB, and UserLocal/RDHWR behavior
 - RAM and ROM
 - UART
 - CPM
@@ -42,8 +45,9 @@ and peripheral paths believable enough for the kernel to mount rootfs and run
 - TCU and OST
 - GPIO
 - DDRC and DDRP
-- I2C enable handshake
+- I2C controller and SC2336 camera sensor model
 - SFC flash controller
+- DesignWare USB OTG (DWC2) controller model
 - EFUSE
 - GMAC/MDIO stub
 - MSC/MMC stub
@@ -88,7 +92,7 @@ Useful flags:
 -rom <path>          firmware image to load
 -ram <bytes>         RAM size, default 64 MiB
 -flash-size <bytes>  SPI flash size, default 8 MiB
--cycles <count>      max cycles before stopping
+-cycles <count>      max cycles before stopping, 0 means unlimited (default 0)
 -history             print the last 40 instructions on halt
 -trace               print instruction trace
 -trace-from <cycle>  start tracing at a specific cycle
@@ -103,6 +107,7 @@ Examples I use a lot:
 go run ./cmd/main.go -rom firmware_dump.bin -history
 go run ./cmd/main.go -rom firmware_dump.bin -trace -trace-from 578570690
 go run ./cmd/main.go -rom firmware_dump.bin -trace-mmio -live-uart=false -uart-limit 4096
+go run ./cmd/main.go -rom openipc-t23n-nor-lite.bin
 ```
 
 SFC debugging:
@@ -159,10 +164,10 @@ usually the best clue.
 - [x] route SFC completion interrupts correctly
 - [x] return the right JEDEC ID for `P25Q64H`
 - [x] reach Linux MTD partition creation
-- [ ] make SFC flash reads solid enough for rootfs mounting
+- [x] make SFC flash reads solid enough for rootfs mounting
 - [ ] improve MSC/MMC backing storage
-- [ ] model GMAC reset and MDIO behavior more accurately
-- [ ] model enough USB/DWC2 to avoid long timeout paths
+- [x] model GMAC reset and MDIO behavior more accurately
+- [x] model enough USB/DWC2 to avoid long timeout paths
 - [ ] replace generic register stubs with real device behavior where boot needs it
 - [ ] reduce boot time without lying to the kernel timers
 - [ ] clean up old CPU tests and add more boot-level regression tests
