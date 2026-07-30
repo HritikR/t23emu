@@ -2,7 +2,7 @@ APP := t23emu
 
 ROM ?= firmware_dump.bin
 RAM ?= 67108864
-CYCLES ?= 200000000000
+CYCLES ?= 0
 UART_LIMIT ?= 4096
 
 BIN_DIR := bin

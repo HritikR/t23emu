@@ -9,7 +9,7 @@ import (
 
 func TestMachineCreation(t *testing.T) {
 
-	m := New(1024, nil)
+	m := New(1024, nil, 0)
 
 	if m.CPU == nil {
 		t.Fatalf(
@@ -38,7 +38,7 @@ func TestMachineCreation(t *testing.T) {
 
 func TestMachineLoadProgram(t *testing.T) {
 
-	m := New(1024, nil)
+	m := New(1024, nil, 0)
 
 	program := []uint32{
 
@@ -76,7 +76,7 @@ func TestMachineLoadProgram(t *testing.T) {
 
 func TestMachineReset(t *testing.T) {
 
-	m := New(1024, nil)
+	m := New(1024, nil, 0)
 
 	m.CPU.WriteRegister(
 		8,
@@ -113,7 +113,7 @@ func TestMachineReset(t *testing.T) {
 
 func TestMachineRunADDIProgram(t *testing.T) {
 
-	m := New(1024, nil)
+	m := New(1024, nil, 0)
 
 	program := []uint32{
 
@@ -154,7 +154,7 @@ func TestMachineRunADDIProgram(t *testing.T) {
 
 func TestMachineRunMultipleInstructions(t *testing.T) {
 
-	m := New(1024, nil)
+	m := New(1024, nil, 0)
 
 	program := []uint32{
 
@@ -213,7 +213,7 @@ func TestMachineRunMultipleInstructions(t *testing.T) {
 
 func TestMachineRunWithCycleLimit(t *testing.T) {
 
-	m := New(1024, nil)
+	m := New(1024, nil, 0)
 
 	program := []uint32{
 
@@ -250,8 +250,10 @@ func TestMachineRunWithCycleLimit(t *testing.T) {
 }
 
 func TestMachineTimerInterruptWakesWAIT(t *testing.T) {
-	m := New(1024, nil)
+	m := New(1024, nil, 0)
 	m.LoadProgram(0, []uint32{0x42000020}) // wait
+	m.CPU.PC = 0x80000000
+	m.CPU.NextPC = 0x80000004
 	m.CPU.CP0[cpu.CP0_STATUS] = cpu.STATUS_IE | cpu.CAUSE_IP2
 	m.INTC.Write32(device.INTC_IMCR, 1<<OSTIRQ)
 
@@ -286,7 +288,7 @@ func TestMachineWithROM(t *testing.T) {
 		0x12,
 	}
 
-	m := New(1024, romData)
+	m := New(1024, romData, 0)
 
 	if m.ROM == nil {
 		t.Fatalf(
@@ -347,7 +349,7 @@ func TestMachineBootFromROM(t *testing.T) {
 		romData[i*4+3] = byte(inst >> 24)
 	}
 
-	m := New(1024, romData)
+	m := New(1024, romData, 0)
 
 	// Verify CPU PC is initialized to virtual boot address 0xbfc00000
 	if m.CPU.PC != 0xbfc00000 {
@@ -428,7 +430,7 @@ func TestMachineUARTConsole(t *testing.T) {
 		),
 	}
 
-	m := New(1024, nil)
+	m := New(1024, nil, 0)
 	m.LoadProgram(0, program)
 
 	// Run the program (5 instructions)

@@ -455,8 +455,8 @@ func (m *Machine) LoadProgram(
 
 // Run executes the CPU for a number of cycles.
 //
-// This prevents tests from accidentally creating
-// infinite loops.
+// If maxCycles is 0, execution continues indefinitely until
+// the CPU halts or is stopped.
 func (m *Machine) Run(maxCycles uint64) uint64 {
 
 	m.CPU.Running = true
@@ -465,7 +465,7 @@ func (m *Machine) Run(maxCycles uint64) uint64 {
 
 	for m.CPU.Running {
 
-		if m.CPU.Cycles-start >= maxCycles {
+		if maxCycles > 0 && m.CPU.Cycles-start >= maxCycles {
 			break
 		}
 

@@ -16,7 +16,7 @@ func main() {
 	romPath := flag.String("rom", "", "Path to the ROM binary image file")
 	ramSize := flag.Uint("ram", 64*1024*1024, "RAM size in bytes")
 	flashSize := flag.Uint("flash-size", 8*1024*1024, "SPI flash size in bytes")
-	cycles := flag.Uint64("cycles", 1500000000, "Maximum instruction cycles to run")
+	cycles := flag.Uint64("cycles", 0, "Maximum instruction cycles to run; use 0 for unlimited")
 	trace := flag.Bool("trace", false, "Enable instruction tracing to stderr")
 	traceMMIO := flag.Bool("trace-mmio", false, "Trace peripheral register accesses to stderr")
 	traceFrom := flag.Uint64("trace-from", 0, "Begin instruction tracing at this cycle")
@@ -39,7 +39,11 @@ func main() {
 	}
 
 	fmt.Printf("Loading ROM: %s (%d bytes)...\n", *romPath, len(romData))
-	fmt.Printf("Initializing T23 Machine (RAM: %d bytes, Flash: %d bytes, Max Cycles: %d)...\n", *ramSize, *flashSize, *cycles)
+	maxCyclesStr := fmt.Sprintf("%d", *cycles)
+	if *cycles == 0 {
+		maxCyclesStr = "unlimited"
+	}
+	fmt.Printf("Initializing T23 Machine (RAM: %d bytes, Flash: %d bytes, Max Cycles: %s)...\n", *ramSize, *flashSize, maxCyclesStr)
 
 	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize))
 	m.CPU.RecordHistory = *history
@@ -94,7 +98,7 @@ func main() {
 	var executedCycles uint64
 
 	traceStart := *traceFrom
-	if traceStart > *cycles {
+	if *cycles > 0 && traceStart > *cycles {
 		traceStart = *cycles
 	}
 
@@ -104,7 +108,11 @@ func main() {
 		// interesting part in setup code.
 		executedCycles = m.Run(traceStart)
 		m.CPU.Trace = true
-		executedCycles += m.Run(*cycles - executedCycles)
+		if *cycles > 0 {
+			executedCycles += m.Run(*cycles - executedCycles)
+		} else {
+			executedCycles += m.Run(0)
+		}
 	} else {
 		m.CPU.Trace = *trace
 		executedCycles = m.Run(*cycles)
