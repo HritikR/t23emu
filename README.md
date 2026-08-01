@@ -1,43 +1,42 @@
 # t23emu
 
-`t23emu` is a small emulator for firmware built for the Ingenic XBurst T23 SoC.
+A small emulator for Ingenic T23 (XBurst MIPS) firmware. It's not QEMU. I built it to run a real T23 firmware dump, see where boot gets stuck, and add just enough hardware to get past that point.
 
-It is not trying to be QEMU. I am using it to run a real T23 firmware dump,
-watch where the boot gets stuck, and then add only the hardware behavior needed
-to get past that point.
-
-Right now it gets through SPL, U-Boot, kernel entry, early Linux init, SFC flash
-detection, and MTD partition setup.
+Right now it boots all the way through the kernel into userspace. The Tuya IoT camera app starts, connects to WiFi, and initializes video/audio pipelines. It eventually hits a kernel panic in the TX-ISP camera driver module, but that's deep into normal operation.
 
 ## what works
 
-The emulator currently gets through:
+Here's what the emulator gets through so far:
 
-- SPL startup and DDR setup
+- SPL startup and DDR init
 - U-Boot relocation into RAM
 - UART console output
-- EFUSE board ID reporting as `T23N`
-- SPI flash detection as `P25Q64H`
-- kernel load and decompression from flash
-- Linux delay calibration
-- CP0 exceptions, interrupts, TLB mappings, and `wait`
-- OST/TCU timing needed by early Linux
+- EFUSE board ID shows up as `T23N`
+- SPI flash detected as `P25Q64H`
+- kernel loads and decompresses from flash
+- Linux delay calibration (1185.38 BogoMIPS)
+- CP0 exceptions, interrupts, TLB, and `wait`
+- OST/TCU timing for early Linux
 - SFC interrupt completion
-- Linux JEDEC readback: `the id code = 856017, the flash name is P25Q64H`
-- MTD partition creation from the kernel command line
-- DWC2 USB OTG controller initialization
-- GMAC reset and MDIO MII bus probing (expected "no PHY" result)
-- Mounting squashfs rootfs from NOR flash partition
-- I2C master controller and SC2336 camera sensor detection
-- Core drivers probe completion (TX-ISP, audio codec, MMC, and RTC)
+- JEDEC readback: `the id code = 856017, the flash name is P25Q64H`
+- MTD partitions from the kernel command line
+- DWC2 USB OTG init and USB ethernet gadget
+- GMAC reset and MDIO bus probe (no PHY, as expected)
+- squashfs rootfs mounted from NOR flash
+- I2C and SC2336 camera sensor detection
+- Core driver probes finish (TX-ISP, audio codec, VPU, RTC)
+- MSC/MMC card detection (SDHC, 3.69 GiB)
+- `/linuxrc` runs, mdev populates `/dev`, zram swap set up
+- Tuya IoT SDK initializes, WiFi connects, BLE starts
+- DHCP lease acquired, video/audio ring buffers allocated
 
-It does not run userspace successfully yet. The next big job is resolving the final CPU exception or instruction issues preventing `/linuxrc` from starting and completing initialization.
+The emulator eventually hits a kernel panic inside the TX-ISP camera driver (`insmod tx_isp_t23`) — a null pointer dereference at a virtual address. That's the current wall.
 
 ## hardware model
 
-- MIPS/XBurst-style CPU interpreter (including UserLocal, COP1, and unaligned/rotate instructions)
+- MIPS/XBurst CPU interpreter (UserLocal, COP1, unaligned/rotate instructions)
 - branch delay slots
-- CP0 exception, interrupt, timer, TLB, and UserLocal/RDHWR behavior
+- CP0 (exceptions, interrupts, timer, TLB, UserLocal, RDHWR)
 - RAM and ROM
 - UART
 - CPM
@@ -45,16 +44,17 @@ It does not run userspace successfully yet. The next big job is resolving the fi
 - TCU and OST
 - GPIO
 - DDRC and DDRP
-- I2C controller and SC2336 camera sensor model
+- I2C controller and SC2336 camera sensor
 - SFC flash controller
-- DesignWare USB OTG (DWC2) controller model
+- SPI NOR flash (P25Q64H, JEDEC readback, DMA transfers)
+- DWC2 USB OTG controller
+- MSC/MMC controller with SDHC card emulation
 - EFUSE
 - GMAC/MDIO stub
-- MSC/MMC stub
-- generic register blocks for the boring parts
+- squashfs filesystem reader
+- generic register blocks for the boring stuff
 
-The SFC model is the most complete device at the moment because both U-Boot and
-Linux lean on it heavily during boot.
+The SFC model is the most fleshed out because both U-Boot and Linux hit it hard during boot.
 
 ## build
 
@@ -62,13 +62,13 @@ Linux lean on it heavily during boot.
 make build
 ```
 
-Or without the Makefile:
+Or just:
 
 ```sh
 go build -o bin/t23emu ./cmd/main.go
 ```
 
-There is also a small image scanner:
+There's also a small image scanner:
 
 ```sh
 make imgscan
@@ -86,24 +86,24 @@ Or:
 make run ROM=firmware_dump.bin
 ```
 
-Useful flags:
+Flags:
 
 ```text
 -rom <path>          firmware image to load
 -ram <bytes>         RAM size, default 64 MiB
 -flash-size <bytes>  SPI flash size, default 8 MiB
--cycles <count>      max cycles before stopping, 0 means unlimited (default 0)
+-cycles <count>      max cycles before stopping, 0 = unlimited (default 0)
 -history             print the last 40 instructions on halt
 -trace               print instruction trace
 -trace-from <cycle>  start tracing at a specific cycle
 -trace-mmio          print MMIO register accesses
 -live-uart=false     collect UART output instead of printing it live
--uart-limit <bytes>  limit collected UART output, 0 means unlimited
--gdb <port>          enable GDB Remote Serial Protocol server (e.g. :1234)
--gdb-wait            pause execution on start until GDB connects
+-uart-limit <bytes>  limit collected UART output, 0 = unlimited
+-gdb <port>          enable GDB RSP server (e.g. :1234)
+-gdb-wait            pause on start until GDB connects
 ```
 
-Examples I use a lot:
+Some examples I use a lot:
 
 ```sh
 go run ./cmd/main.go -rom firmware_dump.bin -history
@@ -128,7 +128,7 @@ Run everything:
 make test
 ```
 
-Useful focused runs:
+Some focused runs:
 
 ```sh
 go test ./internal/device -run 'TestSFC'
@@ -137,7 +137,7 @@ go test ./internal/machine
 go test ./internal/cpu -run 'TLB|Interrupt|CP0|WAIT'
 ```
 
-If Go cannot write to the default build cache:
+If Go can't write to the default build cache:
 
 ```sh
 GOCACHE=$PWD/.gocache go test ./internal/device -run 'TestSFC'
@@ -145,18 +145,15 @@ GOCACHE=$PWD/.gocache go test ./internal/device -run 'TestSFC'
 
 ## debugging notes
 
-Most fixes in this repo start from the boot log.
+Most fixes start from the boot log.
 
-When the firmware waits forever, check what it is polling. When Linux times out,
-check which interrupt or status bit it expected. The emulator should grow from
-those facts, not from guessing a whole SoC up front.
+When the firmware hangs, check what it's polling. When Linux times out, check which interrupt or status bit it was waiting for. The emulator should grow from those facts — not from guessing a whole SoC up front.
 
-The main loop prints a peripheral summary at the end of a run. Hot registers are
-usually the best clue.
+The main loop prints a peripheral summary at the end of a run. Hot registers are usually the best clue.
 
 ## todo
 
-- [x] boot SPL far enough to initialize DDR
+- [x] boot SPL far enough to init DDR
 - [x] run relocated U-Boot from RAM
 - [x] capture UART output
 - [x] report board info as `T23N`
@@ -168,13 +165,15 @@ usually the best clue.
 - [x] return the right JEDEC ID for `P25Q64H`
 - [x] reach Linux MTD partition creation
 - [x] make SFC flash reads solid enough for rootfs mounting
-- [ ] improve MSC/MMC backing storage
 - [x] model GMAC reset and MDIO behavior more accurately
 - [x] model enough USB/DWC2 to avoid long timeout paths
+- [x] boot to `/linuxrc`
+- [x] MSC/MMC with SDHC card detection
+- [x] Tuya IoT userspace init and WiFi connection
+- [ ] fix TX-ISP kernel panic (null deref in camera driver module)
 - [ ] replace generic register stubs with real device behavior where boot needs it
 - [ ] reduce boot time without lying to the kernel timers
 - [ ] clean up old CPU tests and add more boot-level regression tests
-- [ ] boot to `/linuxrc`
 
 ## license
 
