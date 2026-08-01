@@ -55,3 +55,26 @@ func TestRegisterEncodingDecoding(t *testing.T) {
 		t.Errorf("Expected PC to be 0x80001800, got 0x%08x", c.PC)
 	}
 }
+
+func TestWatchpointTrigger(t *testing.T) {
+	b := bus.New()
+	ram := memory.NewRAM(1024 * 1024)
+	b.Map(0x00000000, 1024*1024-1, ram)
+	c := cpu.New(b)
+
+	s := NewServer(":1234", c)
+	s.dispatchPacket("Z2,00001000,4") // Write watchpoint at 0x1000
+
+	if len(c.Watchpoints) != 1 {
+		t.Fatalf("Expected 1 watchpoint, got %d", len(c.Watchpoints))
+	}
+
+	c.Running = true
+	c.CheckWatchpoint(0x1000, 4, true)
+	if c.HitWatchpoint != 0x1000 {
+		t.Errorf("Expected HitWatchpoint 0x1000, got 0x%08x", c.HitWatchpoint)
+	}
+	if c.Running {
+		t.Errorf("Expected CPU to pause on watchpoint hit")
+	}
+}

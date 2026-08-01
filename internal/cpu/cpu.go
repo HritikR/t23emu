@@ -124,9 +124,25 @@ type CPU struct {
 	currentMemVal    uint32
 	currentMemAccess string
 
-	// Debugger breakpoints and single stepping
-	Breakpoints map[uint32]bool
-	SingleStep  bool
+	// Debugger breakpoints, watchpoints, and single stepping
+	Breakpoints   map[uint32]bool
+	Watchpoints   map[string]Watchpoint
+	HitWatchpoint uint32
+	SingleStep    bool
+}
+
+type WatchpointType int
+
+const (
+	WatchWrite  WatchpointType = 2
+	WatchRead   WatchpointType = 3
+	WatchAccess WatchpointType = 4
+)
+
+type Watchpoint struct {
+	Addr uint32
+	Len  uint32
+	Type WatchpointType
 }
 
 // New creates a new CPU instance
@@ -565,7 +581,26 @@ func (c *CPU) GetHistory() []HistoryEntry {
 	return entries
 }
 
+func (c *CPU) CheckWatchpoint(addr uint32, length uint32, isWrite bool) {
+	if len(c.Watchpoints) == 0 {
+		return
+	}
+	accessEnd := addr + length
+	for _, wp := range c.Watchpoints {
+		wpEnd := wp.Addr + wp.Len
+		if addr < wpEnd && wp.Addr < accessEnd {
+			if (isWrite && (wp.Type == WatchWrite || wp.Type == WatchAccess)) ||
+				(!isWrite && (wp.Type == WatchRead || wp.Type == WatchAccess)) {
+				c.HitWatchpoint = wp.Addr
+				c.Running = false
+				return
+			}
+		}
+	}
+}
+
 func (c *CPU) read8(addr uint32) byte {
+	c.CheckWatchpoint(addr, 1, false)
 	val := c.Bus.Read8(addr)
 	c.currentMemAddr = addr
 	c.currentMemVal = uint32(val)
@@ -574,6 +609,7 @@ func (c *CPU) read8(addr uint32) byte {
 }
 
 func (c *CPU) write8(addr uint32, val byte) {
+	c.CheckWatchpoint(addr, 1, true)
 	c.Bus.Write8(addr, val)
 	c.currentMemAddr = addr
 	c.currentMemVal = uint32(val)
@@ -581,6 +617,7 @@ func (c *CPU) write8(addr uint32, val byte) {
 }
 
 func (c *CPU) read16(addr uint32) uint16 {
+	c.CheckWatchpoint(addr, 2, false)
 	val := c.Bus.Read16(addr)
 	c.currentMemAddr = addr
 	c.currentMemVal = uint32(val)
@@ -589,6 +626,7 @@ func (c *CPU) read16(addr uint32) uint16 {
 }
 
 func (c *CPU) write16(addr uint32, val uint16) {
+	c.CheckWatchpoint(addr, 2, true)
 	c.Bus.Write16(addr, val)
 	c.currentMemAddr = addr
 	c.currentMemVal = uint32(val)
@@ -596,6 +634,7 @@ func (c *CPU) write16(addr uint32, val uint16) {
 }
 
 func (c *CPU) read32(addr uint32) uint32 {
+	c.CheckWatchpoint(addr, 4, false)
 	val := c.Bus.Read32(addr)
 	c.currentMemAddr = addr
 	c.currentMemVal = val
@@ -604,6 +643,7 @@ func (c *CPU) read32(addr uint32) uint32 {
 }
 
 func (c *CPU) write32(addr uint32, val uint32) {
+	c.CheckWatchpoint(addr, 4, true)
 	c.Bus.Write32(addr, val)
 	c.currentMemAddr = addr
 	c.currentMemVal = val

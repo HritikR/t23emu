@@ -39,6 +39,10 @@ func NewServer(addr string, cpuInst *cpu.CPU) *Server {
 		waitChan:    make(chan struct{}),
 	}
 
+	if cpuInst.Watchpoints == nil {
+		cpuInst.Watchpoints = make(map[string]cpu.Watchpoint)
+	}
+
 	cpuInst.Breakpoints = s.breakpoints
 	return s
 }
@@ -293,20 +297,53 @@ func (s *Server) dispatchPacket(pkt string) {
 		s.sendPacket("E01")
 
 	case 'Z', 'z':
-		// Breakpoint insert/remove: Z0,<addr>,<kind> or z0,<addr>,<kind>
+		// Breakpoint / Watchpoint insert/remove
+		// Format: Z<type>,<addr>,<kind> or z<type>,<addr>,<kind>
 		isInsert := (cmd == 'Z')
 		parts := strings.Split(body, ",")
-		if len(parts) >= 2 && (parts[0] == "0" || parts[0] == "1") {
-			addr, err := strconv.ParseUint(parts[1], 16, 32)
-			if err == nil {
+		if len(parts) >= 3 {
+			zType := parts[0]
+			addr, err1 := strconv.ParseUint(parts[1], 16, 32)
+			length, err2 := strconv.ParseUint(parts[2], 16, 32)
+			if err1 == nil && err2 == nil {
 				vaddr := uint32(addr)
-				if isInsert {
-					s.breakpoints[vaddr] = true
-				} else {
-					delete(s.breakpoints, vaddr)
+				kindLen := uint32(length)
+				key := fmt.Sprintf("0x%08x", vaddr)
+
+				switch zType {
+				case "0", "1": // Software or Hardware Breakpoint
+					if isInsert {
+						s.breakpoints[vaddr] = true
+					} else {
+						delete(s.breakpoints, vaddr)
+					}
+					s.sendPacket("OK")
+					return
+				case "2": // Write Watchpoint
+					if isInsert {
+						s.cpu.Watchpoints[key] = cpu.Watchpoint{Addr: vaddr, Len: kindLen, Type: cpu.WatchWrite}
+					} else {
+						delete(s.cpu.Watchpoints, key)
+					}
+					s.sendPacket("OK")
+					return
+				case "3": // Read Watchpoint
+					if isInsert {
+						s.cpu.Watchpoints[key] = cpu.Watchpoint{Addr: vaddr, Len: kindLen, Type: cpu.WatchRead}
+					} else {
+						delete(s.cpu.Watchpoints, key)
+					}
+					s.sendPacket("OK")
+					return
+				case "4": // Access Watchpoint
+					if isInsert {
+						s.cpu.Watchpoints[key] = cpu.Watchpoint{Addr: vaddr, Len: kindLen, Type: cpu.WatchAccess}
+					} else {
+						delete(s.cpu.Watchpoints, key)
+					}
+					s.sendPacket("OK")
+					return
 				}
-				s.sendPacket("OK")
-				return
 			}
 		}
 		s.sendPacket("")
@@ -316,19 +353,31 @@ func (s *Server) dispatchPacket(pkt string) {
 		s.unblockWait()
 		s.cpu.SingleStep = true
 		s.cpu.Running = true
+		s.cpu.HitWatchpoint = 0
 		s.cpu.Step()
 		s.cpu.SingleStep = false
-		s.sendPacket("S05")
+		if s.cpu.HitWatchpoint != 0 {
+			s.sendPacket(fmt.Sprintf("T05watch:%x;", s.cpu.HitWatchpoint))
+			s.cpu.HitWatchpoint = 0
+		} else {
+			s.sendPacket("S05")
+		}
 
 	case 'c':
-		// Continue execution until breakpoint, halt, or Ctrl+C interrupt
+		// Continue execution until breakpoint, watchpoint, halt, or Ctrl+C interrupt
 		s.unblockWait()
 		s.cpu.Running = true
+		s.cpu.HitWatchpoint = 0
 		go func() {
 			for s.cpu.Running {
 				time.Sleep(5 * time.Millisecond)
 			}
-			s.sendPacket("S05")
+			if s.cpu.HitWatchpoint != 0 {
+				s.sendPacket(fmt.Sprintf("T05watch:%x;", s.cpu.HitWatchpoint))
+				s.cpu.HitWatchpoint = 0
+			} else {
+				s.sendPacket("S05")
+			}
 		}()
 
 	case 'D':
