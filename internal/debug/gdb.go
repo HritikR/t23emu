@@ -62,6 +62,7 @@ func (s *Server) Close() {
 	if s.conn != nil {
 		_ = s.conn.Close()
 		s.conn = nil
+		s.reader = nil
 	}
 	if s.listener != nil {
 		_ = s.listener.Close()
@@ -105,14 +106,22 @@ func (s *Server) unblockWait() {
 
 func (s *Server) acceptLoop() {
 	for {
-		conn, err := s.listener.Accept()
+		s.mu.Lock()
+		l := s.listener
+		s.mu.Unlock()
+
+		if l == nil {
+			return
+		}
+
+		conn, err := l.Accept()
 		if err != nil {
 			return
 		}
 
 		s.mu.Lock()
 		if s.conn != nil {
-			s.conn.Close()
+			_ = s.conn.Close()
 		}
 		s.conn = conn
 		s.reader = bufio.NewReader(conn)
@@ -128,14 +137,11 @@ func (s *Server) handleSession() {
 	for {
 		pkt, err := s.readPacket()
 		if err != nil {
-			if err != io.EOF {
-				fmt.Printf("[GDB] Connection error: %v\n", err)
-			}
 			s.mu.Lock()
 			s.connected = false
 			s.conn = nil
+			s.reader = nil
 			s.mu.Unlock()
-			fmt.Println("[GDB] Client disconnected.")
 			return
 		}
 
@@ -151,8 +157,16 @@ func (s *Server) handleSession() {
 }
 
 func (s *Server) readPacket() (string, error) {
+	s.mu.Lock()
+	r := s.reader
+	s.mu.Unlock()
+
+	if r == nil {
+		return "", io.EOF
+	}
+
 	for {
-		b, err := s.reader.ReadByte()
+		b, err := r.ReadByte()
 		if err != nil {
 			return "", err
 		}
@@ -169,7 +183,7 @@ func (s *Server) readPacket() (string, error) {
 
 	var buf strings.Builder
 	for {
-		b, err := s.reader.ReadByte()
+		b, err := r.ReadByte()
 		if err != nil {
 			return "", err
 		}
@@ -181,7 +195,7 @@ func (s *Server) readPacket() (string, error) {
 
 	// Read 2-byte checksum
 	csStr := make([]byte, 2)
-	_, err := io.ReadFull(s.reader, csStr)
+	_, err := io.ReadFull(r, csStr)
 	if err != nil {
 		return "", err
 	}
