@@ -123,6 +123,10 @@ type CPU struct {
 	currentMemAddr   uint32
 	currentMemVal    uint32
 	currentMemAccess string
+
+	// Debugger breakpoints and single stepping
+	Breakpoints map[uint32]bool
+	SingleStep  bool
 }
 
 // New creates a new CPU instance
@@ -249,6 +253,11 @@ func (c *CPU) Step() {
 	c.branchTaken = false
 
 	pc := c.PC
+
+	if !c.SingleStep && c.Breakpoints != nil && c.Breakpoints[pc] {
+		c.Running = false
+		return
+	}
 
 	// Address Error check for Fetch
 	if !c.Bus.HasMapping(pc) {

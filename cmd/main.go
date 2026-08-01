@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/HritikR/t23emu/internal/cpu"
+	"github.com/HritikR/t23emu/internal/debug"
 	"github.com/HritikR/t23emu/internal/device"
 	"github.com/HritikR/t23emu/internal/machine"
 )
@@ -28,6 +29,8 @@ func main() {
 	liveUART := flag.Bool("live-uart", true, "Echo UART output live while the emulator runs")
 	uartLimit := flag.Int("uart-limit", 16384, "Maximum captured UART bytes to print per port; use 0 for unlimited")
 	history := flag.Bool("history", false, "Save and print history of the last 40 executed instructions on halt")
+	gdbAddr := flag.String("gdb", "", "Enable GDB RSP server on port or address (e.g. :1234)")
+	gdbWait := flag.Bool("gdb-wait", false, "Pause CPU execution on start until GDB connects")
 
 	flag.Parse()
 
@@ -58,6 +61,41 @@ func main() {
 		}
 	}
 
+	if *gdbAddr != "" {
+		gdbServer := debug.NewServer(*gdbAddr, m.CPU)
+		if err := gdbServer.Start(*gdbWait); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting GDB server: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	blocks := map[string]*device.RegisterBlock{
+		"CPM":    m.CPM,
+		"INTC":   m.INTC.RegisterBlock,
+		"TCU":    m.TCU,
+		"OST":    m.OST.RegisterBlock,
+		"GPIO":   m.GPIO,
+		"I2C0":   m.I2C0.RegisterBlock,
+		"DDRC":   m.DDRC,
+		"DDRP":   m.DDRP,
+		"SFC":    m.SFC.RegisterBlock,
+		"GMAC":   m.GMAC,
+		"DWC2":   m.DWC2,
+		"EFUSE":  m.EFUSE,
+		"MSC":    m.MSC.RegisterBlock,
+		"PERIPH": m.Periph,
+	}
+
+	if *traceMMIO {
+		for _, block := range blocks {
+			block.Trace = true
+		}
+	}
+
+	fmt.Printf("Reset PC: 0x%08X\n", m.CPU.PC)
+	fmt.Println("Starting execution...")
+
+	// Enable Raw Mode for live UART right before starting execution
 	rawModeActive := false
 	var oldState *term.State
 	stdinFd := int(os.Stdin.Fd())
@@ -114,32 +152,6 @@ func main() {
 			}
 		}
 	}()
-
-	blocks := map[string]*device.RegisterBlock{
-		"CPM":    m.CPM,
-		"INTC":   m.INTC.RegisterBlock,
-		"TCU":    m.TCU,
-		"OST":    m.OST.RegisterBlock,
-		"GPIO":   m.GPIO,
-		"I2C0":   m.I2C0.RegisterBlock,
-		"DDRC":   m.DDRC,
-		"DDRP":   m.DDRP,
-		"SFC":    m.SFC.RegisterBlock,
-		"GMAC":   m.GMAC,
-		"DWC2":   m.DWC2,
-		"EFUSE":  m.EFUSE,
-		"MSC":    m.MSC.RegisterBlock,
-		"PERIPH": m.Periph,
-	}
-
-	if *traceMMIO {
-		for _, block := range blocks {
-			block.Trace = true
-		}
-	}
-
-	fmt.Printf("Reset PC: 0x%08X\n", m.CPU.PC)
-	fmt.Println("Starting execution...")
 
 	var executedCycles uint64
 

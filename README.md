@@ -99,12 +99,15 @@ Useful flags:
 -trace-mmio          print MMIO register accesses
 -live-uart=false     collect UART output instead of printing it live
 -uart-limit <bytes>  limit collected UART output, 0 means unlimited
+-gdb <port>          enable GDB Remote Serial Protocol server (e.g. :1234)
+-gdb-wait            pause execution on start until GDB connects
 ```
 
 Examples I use a lot:
 
 ```sh
 go run ./cmd/main.go -rom firmware_dump.bin -history
+go run ./cmd/main.go -rom firmware_dump.bin -gdb :1234 -gdb-wait
 go run ./cmd/main.go -rom firmware_dump.bin -trace -trace-from 578570690
 go run ./cmd/main.go -rom firmware_dump.bin -trace-mmio -live-uart=false -uart-limit 4096
 go run ./cmd/main.go -rom openipc-t23n-nor-lite.bin
