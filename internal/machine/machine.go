@@ -7,6 +7,7 @@ import (
 	"github.com/HritikR/t23emu/internal/bus"
 	"github.com/HritikR/t23emu/internal/cpu"
 	"github.com/HritikR/t23emu/internal/device"
+	"github.com/HritikR/t23emu/internal/fs"
 	"github.com/HritikR/t23emu/internal/memory"
 )
 
@@ -262,8 +263,8 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 	ddrp := device.NewDDRP()
 	b.Map(DDRPStart, DDRPEnd, ddrp)
 
-	emptyImage := make([]byte, 1024*1024)
-	msc0 := device.NewMSC("MSC0", true, emptyImage)
+	emptyFat32Image := fs.CreateEmptyFAT32Image(131072)
+	msc0 := device.NewMSC("MSC0", true, emptyFat32Image)
 	b.Map(MSC0Start, MSC0End, msc0)
 
 	sfc := device.NewSFC(romData, sfcSize)
