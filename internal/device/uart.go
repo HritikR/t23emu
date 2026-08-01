@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 // Ingenic UART register offsets. The part uses a 16550-compatible layout
@@ -74,6 +75,35 @@ type UART struct {
 
 	// rx holds bytes queued for the firmware to read.
 	rx []byte
+
+	// Interrupt callback to trigger INTC interrupts
+	Interrupt func(assert bool)
+	iir       byte
+	threPending bool
+}
+
+func (u *UART) updateInterrupts() {
+	if u.Interrupt == nil {
+		return
+	}
+
+	pending := false
+	var iir byte = 0x01 // No interrupt pending
+
+	if len(u.rx) > 0 && (u.ier&0x01) != 0 {
+		pending = true
+		iir = 0x04 // RDA (Receiver Data Available)
+	} else if (u.ier&0x02) != 0 && u.threPending {
+		pending = true
+		iir = 0x02 // THRE (Transmitter Holding Register Empty)
+	}
+
+	if u.fcr&FCR_FE != 0 {
+		iir |= 0xC0
+	}
+
+	u.iir = iir
+	u.Interrupt(pending)
 }
 
 // NewUART creates a new UART device. If out is nil, it defaults to os.Stdout.
@@ -82,8 +112,10 @@ func NewUART(out io.Writer) *UART {
 		out = os.Stdout
 	}
 	return &UART{
-		output: out,
-		buf:    make([]byte, 0),
+		output:      out,
+		buf:         make([]byte, 0),
+		threPending: true,
+		iir:         0x01,
 	}
 }
 
@@ -122,6 +154,7 @@ func (u *UART) Feed(data []byte) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.rx = append(u.rx, data...)
+	u.updateInterrupts()
 }
 
 // dlab reports whether the divisor latches are currently mapped over the
@@ -149,6 +182,7 @@ func (u *UART) Read8(addr uint32) byte {
 		if len(u.rx) > 0 {
 			b := u.rx[0]
 			u.rx = u.rx[1:]
+			u.updateInterrupts()
 			return b
 		}
 		return 0
@@ -160,13 +194,7 @@ func (u *UART) Read8(addr uint32) byte {
 		return u.ier
 
 	case UART_FCR:
-		// Read back as the interrupt identification register: no
-		// interrupt pending, with the FIFO enable bits mirrored.
-		iir := byte(0x01)
-		if u.fcr&FCR_FE != 0 {
-			iir |= 0xC0
-		}
-		return iir
+		return u.iir
 
 	case UART_LCR:
 		return u.lcr
@@ -219,6 +247,17 @@ func (u *UART) Write8(addr uint32, value byte) {
 		} else {
 			u.buf = append(u.buf, value)
 			emit = true
+
+			u.threPending = false
+			u.updateInterrupts()
+
+			go func() {
+				time.Sleep(100 * time.Microsecond)
+				u.mu.Lock()
+				defer u.mu.Unlock()
+				u.threPending = true
+				u.updateInterrupts()
+			}()
 		}
 
 	case UART_IER:
@@ -226,10 +265,12 @@ func (u *UART) Write8(addr uint32, value byte) {
 			u.dlm = value
 		} else {
 			u.ier = value
+			u.updateInterrupts()
 		}
 
 	case UART_FCR:
 		u.fcr = value
+		u.updateInterrupts()
 
 	case UART_LCR:
 		u.lcr = value

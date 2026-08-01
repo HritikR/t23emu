@@ -43,6 +43,16 @@ const (
 	// bank-0 dispatcher adds 8 to the pending bit index before do_IRQ().
 	SFCIRQ uint8 = 7
 
+	// MSC0IRQ is the INTC hardware bit that maps to Linux IRQ 37.
+	// Linux IRQ = INTC HW Bit + 8 => MSC0IRQ = 37 - 8 = 29.
+	MSC0IRQ uint8 = 29
+
+	// UART IRQs. UART1 (ttyS1) maps to Linux IRQ 58.
+	// Linux IRQ = INTC HW Bit + 8 => UART1IRQ = 58 - 8 = 50.
+	UART0IRQ uint8 = 49 // Linux IRQ 57
+	UART1IRQ uint8 = 50 // Linux IRQ 58
+	UART2IRQ uint8 = 51 // Linux IRQ 59
+
 	// I2C0IRQ is the INTC bit the vendor kernel unmasks for the hardware
 	// I2C0 controller at 0x10050000.
 	I2C0IRQ uint8 = 60
@@ -343,6 +353,26 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 			intc.Assert(I2C0IRQ)
 		} else {
 			intc.Deassert(I2C0IRQ)
+		}
+	}
+
+	msc0.Interrupt = func(assert bool) {
+		if assert {
+			intc.Assert(MSC0IRQ)
+		} else {
+			intc.Deassert(MSC0IRQ)
+		}
+	}
+
+	uartIRQs := []uint8{UART0IRQ, UART1IRQ, UART2IRQ}
+	for i, u := range uarts {
+		irq := uartIRQs[i]
+		u.Interrupt = func(assert bool) {
+			if assert {
+				intc.Assert(irq)
+			} else {
+				intc.Deassert(irq)
+			}
 		}
 	}
 

@@ -71,6 +71,9 @@ type MSC struct {
 	// as bytes so byte/halfword/word accesses all consume it correctly.
 	resBuffer []byte
 	resIndex  int
+
+	// Interrupt callback to assert the interrupt line to INTC
+	Interrupt func(assert bool)
 }
 
 func NewMSC(name string, cardPresent bool, diskImage []byte) *MSC {
@@ -218,9 +221,13 @@ func (m *MSC) Write32(addr uint32, value uint32) {
 
 	case MSC_IREG:
 		m.regs[MSC_IREG] &^= value
+		m.updateInterrupts()
 
 	default:
 		m.regs[offset] = value
+		if offset == MSC_IMASK {
+			m.updateInterrupts()
+		}
 	}
 
 	if m.Trace {
@@ -261,6 +268,18 @@ func (m *MSC) Write8(addr uint32, value byte) {
 	m.Write32(offset, word)
 }
 
+func (m *MSC) updateInterrupts() {
+	if m.Interrupt == nil {
+		return
+	}
+	mask, exists := m.regs[MSC_IMASK]
+	if !exists {
+		mask = 0xFFFFFFFF
+	}
+	ireg := m.regs[MSC_IREG]
+	m.Interrupt((ireg & ^mask) != 0)
+}
+
 func (m *MSC) writeSTRPCL(value uint32) {
 	m.regs[MSC_STRPCL] = value &^ (MSC_STRPCL_RESET | MSC_STRPCL_START_OP)
 
@@ -291,9 +310,12 @@ func (m *MSC) resetController() {
 	m.expectAppCmd = false
 	m.clockRunning = false
 	m.regs[MSC_STAT] &^= MSC_STAT_IS_RESETTING
+	m.updateInterrupts()
 }
 
 func (m *MSC) startCommand() {
+	defer m.updateInterrupts()
+
 	m.resBuffer = m.resBuffer[:0] // Clear response stream for new command
 	m.resIndex = 0
 
