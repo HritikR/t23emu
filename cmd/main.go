@@ -6,6 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+
+	"golang.org/x/term"
 
 	"github.com/HritikR/t23emu/internal/cpu"
 	"github.com/HritikR/t23emu/internal/device"
@@ -53,12 +58,53 @@ func main() {
 		}
 	}
 
+	rawModeActive := false
+	var oldState *term.State
+	stdinFd := int(os.Stdin.Fd())
+
+	if *liveUART && term.IsTerminal(stdinFd) {
+		state, err := term.MakeRaw(stdinFd)
+		if err == nil {
+			oldState = state
+			rawModeActive = true
+		}
+	}
+
+	var restoreOnce sync.Once
+	restoreTerminal := func() {
+		restoreOnce.Do(func() {
+			if oldState != nil {
+				_ = term.Restore(stdinFd, oldState)
+			}
+		})
+	}
+	defer restoreTerminal()
+
+	// Catch OS signals to ensure terminal state is restored on interruption
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		restoreTerminal()
+		m.CPU.Stop()
+	}()
+
 	// Redirect standard input to the UARTs
 	go func() {
 		buf := make([]byte, 1024)
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
+				if rawModeActive {
+					for i := 0; i < n; i++ {
+						if buf[i] == 0x1d { // Ctrl+]
+							restoreTerminal()
+							fmt.Fprintln(os.Stderr, "\r\n[t23emu: terminated by Ctrl+]]")
+							m.CPU.Stop()
+							return
+						}
+					}
+				}
 				for _, port := range m.UARTs {
 					port.Feed(buf[:n])
 				}
@@ -117,6 +163,8 @@ func main() {
 		m.CPU.Trace = *trace
 		executedCycles = m.Run(*cycles)
 	}
+
+	restoreTerminal()
 
 	fmt.Printf("Execution stopped after %d cycles.\n\n", executedCycles)
 
