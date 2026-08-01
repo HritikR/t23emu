@@ -186,8 +186,35 @@ type Machine struct {
 	BootROMReturn uint32
 }
 
+// Option configures a Machine instance.
+type Option func(*MachineOptions)
+
+type MachineOptions struct {
+	DisableSDCard bool
+	SDCardImage   []byte
+}
+
+// WithSDCardImage sets a custom SD card disk image.
+func WithSDCardImage(image []byte) Option {
+	return func(o *MachineOptions) {
+		o.SDCardImage = image
+	}
+}
+
+// WithDisableSDCard disables SD card presence in the MSC controller.
+func WithDisableSDCard() Option {
+	return func(o *MachineOptions) {
+		o.DisableSDCard = true
+	}
+}
+
 // New creates a new T23 emulator machine.
-func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
+func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machine {
+	options := &MachineOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	if sfcSize == 0 {
 		sfcSize = 8 * 1024 * 1024
 	}
@@ -263,8 +290,21 @@ func New(ramSize uint32, romData []byte, sfcSize uint32) *Machine {
 	ddrp := device.NewDDRP()
 	b.Map(DDRPStart, DDRPEnd, ddrp)
 
-	emptyFat32Image := fs.CreateEmptyFAT32Image(131072)
-	msc0 := device.NewMSC("MSC0", true, emptyFat32Image)
+	var cardPresent bool
+	var mscDiskImage []byte
+
+	if options.DisableSDCard {
+		cardPresent = false
+		mscDiskImage = nil
+	} else if options.SDCardImage != nil {
+		cardPresent = true
+		mscDiskImage = options.SDCardImage
+	} else {
+		cardPresent = true
+		mscDiskImage = fs.CreateEmptyFAT32Image(131072)
+	}
+
+	msc0 := device.NewMSC("MSC0", cardPresent, mscDiskImage)
 	b.Map(MSC0Start, MSC0End, msc0)
 
 	sfc := device.NewSFC(romData, sfcSize)

@@ -452,3 +452,36 @@ func TestMachineUARTConsole(t *testing.T) {
 		)
 	}
 }
+
+func TestMachineWithSDCardOptions(t *testing.T) {
+	t.Run("Disabled SD Card", func(t *testing.T) {
+		m := New(1024, nil, 0, WithDisableSDCard())
+		if m.MSC == nil {
+			t.Fatalf("expected MSC controller to be present")
+		}
+		// Send command to verify card is reported as absent (times out)
+		m.MSC.Write32(device.MSC_CMD, 41)
+		m.MSC.Write32(device.MSC_STRPCL, device.MSC_STRPCL_START_OP)
+		if got := m.MSC.Read32(device.MSC_STAT); got&device.MSC_STAT_TIME_OUT_RES == 0 {
+			t.Fatalf("expected command timeout for disabled SD card")
+		}
+	})
+
+	t.Run("Custom SD Card Image", func(t *testing.T) {
+		img := make([]byte, 1024)
+		copy(img, []byte("TEST_SD_IMAGE"))
+		m := New(1024, nil, 0, WithSDCardImage(img))
+		if m.MSC == nil {
+			t.Fatalf("expected MSC controller to be present")
+		}
+		// CMD17 read single block
+		m.MSC.Write32(device.MSC_NOB, 1)
+		m.MSC.Write32(device.MSC_CMD, 17)
+		m.MSC.Write32(device.MSC_ARG, 0)
+		m.MSC.Write32(device.MSC_STRPCL, device.MSC_STRPCL_START_OP)
+		if got := m.MSC.Read32(device.MSC_STAT); got&device.MSC_STAT_DATA_TRAN_DONE == 0 {
+			t.Fatalf("expected DATA_TRAN_DONE bit for sector read")
+		}
+	})
+}
+

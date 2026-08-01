@@ -32,6 +32,8 @@ func main() {
 	history := flag.Bool("history", false, "Save and print history of the last 40 executed instructions on halt")
 	gdbAddr := flag.String("gdb", "", "Enable GDB RSP server on port or address (e.g. :1234)")
 	gdbWait := flag.Bool("gdb-wait", false, "Pause CPU execution on start until GDB connects")
+	sdcardPath := flag.String("sdcard", "", "Path to optional SD card image file to mount")
+	noSDCard := flag.Bool("no-sdcard", false, "Disable SD card presence in MSC controller")
 
 	flag.Parse()
 
@@ -54,7 +56,23 @@ func main() {
 	}
 	fmt.Printf("Initializing T23 Machine (RAM: %d bytes, Flash: %d bytes, Max Cycles: %s)...\n", *ramSize, *flashSize, maxCyclesStr)
 
-	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize))
+	var machineOpts []machine.Option
+	if *noSDCard {
+		machineOpts = append(machineOpts, machine.WithDisableSDCard())
+		fmt.Println("SD Card: disabled (no card present)")
+	} else if *sdcardPath != "" {
+		sdData, err := os.ReadFile(*sdcardPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to read SD card image file: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Loading SD card image: %s (%d bytes)...\n", *sdcardPath, len(sdData))
+		machineOpts = append(machineOpts, machine.WithSDCardImage(sdData))
+	} else {
+		fmt.Println("SD Card: using default empty FAT32 image")
+	}
+
+	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize), machineOpts...)
 	m.CPU.RecordHistory = *history
 	if !*liveUART {
 		for _, port := range m.UARTs {
