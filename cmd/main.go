@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/term"
 
@@ -61,8 +62,9 @@ func main() {
 		}
 	}
 
+	var gdbServer *debug.Server
 	if *gdbAddr != "" {
-		gdbServer := debug.NewServer(*gdbAddr, m.CPU)
+		gdbServer = debug.NewServer(*gdbAddr, m.CPU)
 		if err := gdbServer.Start(*gdbWait); err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting GDB server: %v\n", err)
 			os.Exit(1)
@@ -118,13 +120,22 @@ func main() {
 	}
 	defer restoreTerminal()
 
+	userQuit := false
+	quitEmulator := func() {
+		userQuit = true
+		restoreTerminal()
+		if gdbServer != nil {
+			gdbServer.Close()
+		}
+		m.CPU.Stop()
+	}
+
 	// Catch OS signals to ensure terminal state is restored on interruption
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		restoreTerminal()
-		m.CPU.Stop()
+		quitEmulator()
 	}()
 
 	// Redirect standard input to the UARTs
@@ -136,9 +147,8 @@ func main() {
 				if rawModeActive {
 					for i := 0; i < n; i++ {
 						if buf[i] == 0x1d { // Ctrl+]
-							restoreTerminal()
 							fmt.Fprintln(os.Stderr, "\r\n[t23emu: terminated by Ctrl+]]")
-							m.CPU.Stop()
+							quitEmulator()
 							return
 						}
 					}
@@ -173,7 +183,17 @@ func main() {
 		}
 	} else {
 		m.CPU.Trace = *trace
-		executedCycles = m.Run(*cycles)
+		if gdbServer != nil {
+			for !userQuit && (gdbServer.IsConnected() || m.CPU.Running) {
+				if m.CPU.Running {
+					executedCycles += m.Run(*cycles)
+				} else {
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+		} else {
+			executedCycles = m.Run(*cycles)
+		}
 	}
 
 	restoreTerminal()

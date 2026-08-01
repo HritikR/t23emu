@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/HritikR/t23emu/internal/cpu"
 )
@@ -40,6 +41,28 @@ func NewServer(addr string, cpuInst *cpu.CPU) *Server {
 
 	cpuInst.Breakpoints = s.breakpoints
 	return s
+}
+
+// IsConnected returns whether a GDB client is currently connected.
+func (s *Server) IsConnected() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connected
+}
+
+// Close terminates the GDB server listener and active client connection.
+func (s *Server) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connected = false
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+	}
+	if s.listener != nil {
+		_ = s.listener.Close()
+		s.listener = nil
+	}
 }
 
 // Start opens the TCP listener and accepts incoming GDB connections.
@@ -112,6 +135,12 @@ func (s *Server) handleSession() {
 			return
 		}
 
+		if pkt == "\x03" {
+			s.cpu.Stop()
+			s.sendPacket("S05")
+			continue
+		}
+
 		s.sendACK()
 		s.dispatchPacket(pkt)
 	}
@@ -130,8 +159,7 @@ func (s *Server) readPacket() (string, error) {
 		}
 		// Interrupt character 0x03 sent by GDB during continue
 		if b == 0x03 {
-			s.cpu.Stop()
-			return "", nil
+			return "\x03", nil
 		}
 	}
 
@@ -293,9 +321,26 @@ func (s *Server) dispatchPacket(pkt string) {
 		s.sendPacket("S05")
 
 	case 'c':
-		// Continue execution
+		// Continue execution until breakpoint, halt, or Ctrl+C interrupt
 		s.unblockWait()
+		s.cpu.Running = true
+		go func() {
+			for s.cpu.Running {
+				time.Sleep(5 * time.Millisecond)
+			}
+			s.sendPacket("S05")
+		}()
+
+	case 'D':
+		// Detach from target
 		s.sendPacket("OK")
+		s.mu.Lock()
+		if s.conn != nil {
+			_ = s.conn.Close()
+			s.conn = nil
+		}
+		s.connected = false
+		s.mu.Unlock()
 
 	case 'k':
 		// Kill target
@@ -307,13 +352,43 @@ func (s *Server) dispatchPacket(pkt string) {
 	}
 }
 
+const targetXML = `<?xml version="1.0"?>
+<!DOCTYPE target SYSTEM "gdb-target.dtd">
+<target>
+  <architecture>mips:isa32r2</architecture>
+</target>`
+
 func (s *Server) handleQuery(body string) {
 	if strings.HasPrefix(body, "Supported") {
-		s.sendPacket("PacketSize=1000;swbreak+;hwbreak+")
+		s.sendPacket("PacketSize=1000;swbreak+;hwbreak+;qXfer:features:read+")
 		return
 	}
 	if strings.HasPrefix(body, "Attached") {
 		s.sendPacket("1") // Attached to an existing process
+		return
+	}
+	if strings.HasPrefix(body, "Xfer:features:read:target.xml:") {
+		params := strings.TrimPrefix(body, "Xfer:features:read:target.xml:")
+		parts := strings.Split(params, ",")
+		offset := 0
+		length := len(targetXML)
+		if len(parts) == 2 {
+			if o, err := strconv.Atoi(parts[0]); err == nil {
+				offset = o
+			}
+			if l, err := strconv.Atoi(parts[1]); err == nil {
+				length = l
+			}
+		}
+		if offset >= len(targetXML) {
+			s.sendPacket("l")
+			return
+		}
+		end := offset + length
+		if end > len(targetXML) {
+			end = len(targetXML)
+		}
+		s.sendPacket("l" + targetXML[offset:end])
 		return
 	}
 	s.sendPacket("")
