@@ -1,180 +1,156 @@
 # t23emu
 
-A small emulator for Ingenic T23 (XBurst MIPS) firmware. It's not QEMU. I built it to run a real T23 firmware dump, see where boot gets stuck, and add just enough hardware to get past that point.
+I built this emulator to run real firmware dumps from Ingenic T23 chips. It is not QEMU. My goal was simple: load a raw firmware image, see where execution hangs, and write just enough hardware emulation to move past that spot.
 
-Right now it boots all the way through the kernel into userspace. The Tuya IoT camera app starts, connects to WiFi, and initializes video/audio pipelines. It eventually hits a kernel panic in the TX-ISP camera driver module, but that's deep into normal operation.
+Right now, my emulator boots all the way through the Linux kernel and launches userspace apps. The Tuya IoT camera software starts up, connects to WiFi, and sets up video buffers. It runs fine until it hits a null pointer crash inside the TX ISP camera driver module.
 
 ## what works
 
-Here's what the emulator gets through so far:
+Here is what boots successfully:
 
-- SPL startup and DDR init
-- U-Boot relocation into RAM
-- UART console output
-- EFUSE board ID shows up as `T23N`
-- SPI flash detected as `P25Q64H`
-- kernel loads and decompresses from flash
-- Linux delay calibration (1185.38 BogoMIPS)
-- CP0 exceptions, interrupts, TLB, and `wait`
-- OST/TCU timing for early Linux
-- SFC interrupt completion
-- JEDEC readback: `the id code = 856017, the flash name is P25Q64H`
-- MTD partitions from the kernel command line
-- DWC2 USB OTG init and USB ethernet gadget
-- GMAC reset and MDIO bus probe (no PHY, as expected)
-- squashfs rootfs mounted from NOR flash
-- I2C and SC2336 camera sensor detection
-- Core driver probes finish (TX-ISP, audio codec, VPU, RTC)
-- MSC/MMC card detection (SDHC, 3.69 GiB)
-- `/linuxrc` runs, mdev populates `/dev`, zram swap set up
-- Tuya IoT SDK initializes, WiFi connects, BLE starts
-- DHCP lease acquired, video/audio ring buffers allocated
+* SPL startup and DDR memory setup
+* UBoot relocation into RAM
+* Serial console output over UART
+* EFUSE board check showing T23N
+* SPI flash detection as P25Q64H
+* Linux kernel loading and decompression from flash
+* Linux delay calibration at 1185.38 BogoMIPS
+* CP0 exceptions, interrupts, TLB, and wait instruction handling
+* OST and TCU hardware timers for early Linux timekeeping
+* SFC flash interrupts and DMA memory transfers
+* JEDEC code readback for P25Q64H flash
+* MTD flash partition mapping from kernel arguments
+* DWC2 USB OTG setup and USB ethernet gadget
+* GMAC network reset and MDIO bus scanning
+* Mounting squashfs root filesystem from NOR flash
+* I2C bus detection and SC2336 camera sensor probing
+* Driver initialization for TX ISP, audio codec, VPU, and RTC
+* MSC MMC storage driver and SDHC card detection
+* Running linuxrc, building dev files with mdev, and setting up zram swap
+* Tuya IoT SDK startup, WiFi connection, and BLE initialization
+* DHCP IP address acquisition and video ring buffer allocation
 
-The emulator eventually hits a kernel panic inside the TX-ISP camera driver (`insmod tx_isp_t23`) — a null pointer dereference at a virtual address. That's the current wall.
+Execution stops when the TX ISP camera driver (`insmod tx_isp_t23`) triggers a kernel panic. That is the current wall I am working on.
 
 ## hardware model
 
-- MIPS/XBurst CPU interpreter (UserLocal, COP1, unaligned/rotate instructions)
-- branch delay slots
-- CP0 (exceptions, interrupts, timer, TLB, UserLocal, RDHWR)
-- RAM and ROM
-- UART
-- CPM
-- INTC
-- TCU and OST
-- GPIO
-- DDRC and DDRP
-- I2C controller and SC2336 camera sensor
-- SFC flash controller
-- SPI NOR flash (P25Q64H, JEDEC readback, DMA transfers)
-- DWC2 USB OTG controller
-- MSC/MMC controller with SDHC card emulation
-- EFUSE
-- GMAC/MDIO stub
-- squashfs filesystem reader
-- generic register blocks for the boring stuff
+Here is what I have modeled so far:
 
-The SFC model is the most fleshed out because both U-Boot and Linux hit it hard during boot.
+* MIPS XBurst CPU core interpreter with branch delay slots
+* CP0 register set for exceptions, interrupts, timers, and TLB
+* System RAM and boot ROM
+* UART serial interface
+* Clock and power management unit (CPM)
+* Interrupt controller (INTC)
+* Timer units (TCU and OST)
+* GPIO controller
+* DDR memory controllers (DDRC and DDRP)
+* I2C controller and SC2336 camera sensor
+* SFC flash controller with SPI NOR flash emulation
+* DWC2 USB OTG controller
+* MSC MMC controller with SDHC card support
+* EFUSE hardware block
+* GMAC network stub and MDIO bus
+* GDB RSP server for remote debugging and stepping
+* squashfs reader support
+* Register stubs for unused memory regions
 
-## build
+The SFC flash controller is the most complete piece because UBoot and Linux read from flash constantly.
+
+## build and run
+
+You can build the project with make:
 
 ```sh
 make build
 ```
 
-Or just:
+Or use the Go tool directly:
 
 ```sh
-go build -o bin/t23emu ./cmd/main.go
+go build ./cmd/main.go
 ```
 
-There's also a small image scanner:
+I also wrote a small image scanner tool:
 
 ```sh
 make imgscan
 ```
 
-## run
-
-```sh
-go run ./cmd/main.go -rom firmware_dump.bin
-```
-
-Or:
+To run a firmware dump:
 
 ```sh
 make run ROM=firmware_dump.bin
 ```
 
-Flags:
-
-```text
--rom <path>          firmware image to load
--ram <bytes>         RAM size, default 64 MiB
--flash-size <bytes>  SPI flash size, default 8 MiB
--cycles <count>      max cycles before stopping, 0 = unlimited (default 0)
--history             print the last 40 instructions on halt
--trace               print instruction trace
--trace-from <cycle>  start tracing at a specific cycle
--trace-mmio          print MMIO register accesses
--live-uart=false     collect UART output instead of printing it live
--uart-limit <bytes>  limit collected UART output, 0 = unlimited
--gdb <port>          enable GDB RSP server (e.g. :1234)
--gdb-wait            pause on start until GDB connects
-```
-
-Some examples I use a lot:
+You can pass extra parameters to make if needed:
 
 ```sh
-go run ./cmd/main.go -rom firmware_dump.bin -history
-go run ./cmd/main.go -rom firmware_dump.bin -gdb :1234 -gdb-wait
-go run ./cmd/main.go -rom firmware_dump.bin -trace -trace-from 578570690
-go run ./cmd/main.go -rom firmware_dump.bin -trace-mmio -live-uart=false -uart-limit 4096
-go run ./cmd/main.go -rom openipc-t23n-nor-lite.bin
+make run ROM=firmware_dump.bin RAM=67108864
 ```
 
-SFC debugging:
+To enable SFC trace logs while running:
 
 ```sh
-T23EMU_TRACE_SFC_IRQ=1 go run ./cmd/main.go -rom firmware_dump.bin
-T23EMU_TRACE_SFC=1 T23EMU_TRACE_SFC_LINES=2000 go run ./cmd/main.go -rom firmware_dump.bin
+T23EMU_TRACE_SFC=1 make run ROM=firmware_dump.bin
 ```
 
-## tests
+## testing
 
-Run everything:
+Run the full test suite:
 
 ```sh
 make test
 ```
 
-Some focused runs:
+Or run tests for specific packages:
 
 ```sh
-go test ./internal/device -run 'TestSFC'
 go test ./internal/device
 go test ./internal/machine
-go test ./internal/cpu -run 'TLB|Interrupt|CP0|WAIT'
+go test ./internal/cpu
 ```
 
-If Go can't write to the default build cache:
+If Go needs a local build cache directory:
 
 ```sh
-GOCACHE=$PWD/.gocache go test ./internal/device -run 'TestSFC'
+GOCACHE=$PWD/.gocache go test ./internal/device
 ```
 
-## debugging notes
+## how I debug
 
-Most fixes start from the boot log.
+Most of my fixes start by reading the boot log.
 
-When the firmware hangs, check what it's polling. When Linux times out, check which interrupt or status bit it was waiting for. The emulator should grow from those facts — not from guessing a whole SoC up front.
+When firmware gets stuck in a loop, I look at what register it reads over and over. When Linux hangs, I check which interrupt bit it expects. I only add hardware features when the boot log proves they are needed.
 
-The main loop prints a peripheral summary at the end of a run. Hot registers are usually the best clue.
+I also built a GDB RSP server into the emulator. You can attach GDB over a network port like :1234 to inspect registers, set breakpoints, or step through instructions single cycle at a time. You can also pause startup until GDB connects.
+
+When execution stops, my emulator prints a register access summary. Hot registers in that summary usually show what peripheral needs attention next.
 
 ## todo
 
-- [x] boot SPL far enough to init DDR
-- [x] run relocated U-Boot from RAM
-- [x] capture UART output
-- [x] report board info as `T23N`
-- [x] emulate enough SFC for U-Boot flash probe
-- [x] load and decompress the Linux kernel
-- [x] handle early CP0 exceptions, interrupts, TLB, and `wait`
-- [x] provide OST/TCU behavior for Linux timekeeping
-- [x] route SFC completion interrupts correctly
-- [x] return the right JEDEC ID for `P25Q64H`
-- [x] reach Linux MTD partition creation
-- [x] make SFC flash reads solid enough for rootfs mounting
-- [x] model GMAC reset and MDIO behavior more accurately
-- [x] model enough USB/DWC2 to avoid long timeout paths
-- [x] boot to `/linuxrc`
-- [x] MSC/MMC with SDHC card detection
-- [x] Tuya IoT userspace init and WiFi connection
-- [ ] fix TX-ISP kernel panic (null deref in camera driver module)
-- [ ] replace generic register stubs with real device behavior where boot needs it
-- [ ] reduce boot time without lying to the kernel timers
-- [ ] clean up old CPU tests and add more boot-level regression tests
+* [x] Boot SPL far enough to initialize DDR RAM
+* [x] Run relocated UBoot from RAM
+* [x] Capture serial console output
+* [x] Report board identification as T23N
+* [x] Emulate SFC flash controller for UBoot probe
+* [x] Load and decompress Linux kernel image
+* [x] Handle CP0 exceptions, interrupts, TLB, and wait instruction
+* [x] Provide OST and TCU timers for Linux timekeeping
+* [x] Route SFC completion interrupts correctly
+* [x] Return correct JEDEC code for P25Q64H flash
+* [x] Create Linux MTD partitions from command line
+* [x] Mount squashfs root filesystem from NOR flash
+* [x] Model GMAC reset and MDIO probe
+* [x] Model DWC2 USB controller to prevent boot timeouts
+* [x] Boot to linuxrc init process
+* [x] Support MSC MMC controller and SDHC card detection
+* [x] Run Tuya IoT userspace app and connect WiFi
+* [ ] Fix TX ISP kernel panic in camera driver module
+* [ ] Replace register stubs with real hardware logic
+* [ ] Speed up boot time without breaking kernel timers
+* [ ] Clean up CPU tests and add boot regression tests
 
 ## license
 
-MIT. See [LICENSE](LICENSE).
+MIT. See LICENSE file for details.
