@@ -9,6 +9,7 @@ import (
 	"github.com/HritikR/t23emu/internal/device"
 	"github.com/HritikR/t23emu/internal/fs"
 	"github.com/HritikR/t23emu/internal/memory"
+	"github.com/HritikR/t23emu/internal/sensor"
 )
 
 const (
@@ -292,6 +293,9 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 	uart := uarts[0]
 
 	i2c0 := device.NewI2C("I2C0")
+	sc2336 := sensor.NewSC2336()
+	i2c0.AttachDevice(0x30, sc2336)
+	i2c0.AttachDevice(0x36, sc2336)
 	b.Map(I2C0Start, I2C0End, i2c0)
 
 	ddrc := device.NewDDRC()

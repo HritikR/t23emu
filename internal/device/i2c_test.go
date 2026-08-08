@@ -1,6 +1,10 @@
 package device
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/HritikR/t23emu/internal/sensor"
+)
 
 // The driver writes ENB and then waits for the controller to acknowledge
 // in ENSTA. An ENSTA stuck at zero costs the boot five seconds of jiffy
@@ -70,6 +74,14 @@ func TestI2CStatusReportsTransmitReady(t *testing.T) {
 
 func TestI2CSensorIDReadSequence(t *testing.T) {
 	i2c := NewI2C("I2C0")
+	s := sensor.NewSC2336()
+	const sensorAddr uint32 = 0x30
+	i2c.AttachDevice(sensorAddr, s)
+	i2c.Write32(I2C_TAR, sensorAddr)
+
+	if got := i2c.Read32(I2C_TAR); got != sensorAddr {
+		t.Fatalf("expected TAR 0x%02X, got 0x%02X", sensorAddr, got)
+	}
 
 	i2c.Write32(I2C_DC, 0x31)
 	i2c.Write32(I2C_DC, 0x07)

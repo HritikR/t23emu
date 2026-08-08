@@ -45,24 +45,38 @@ const (
 	i2cIntRXFull  uint32 = 1 << 2
 )
 
+// I2CDevice defines the interface for devices connected to the I2C bus.
+type I2CDevice interface {
+	WriteI2C(val byte)
+	ReadI2C() byte
+}
+
 type I2C struct {
 	*RegisterBlock
 
 	Interrupt func(assert bool)
+
+	devices    map[uint32]I2CDevice
+	targetAddr uint32
 
 	intMask  uint32
 	pending  uint32
 	irqState bool
 }
 
+// AttachDevice registers an I2CDevice at a specific target address.
+func (i *I2C) AttachDevice(targetAddress uint32, dev I2CDevice) {
+	i.devices[targetAddress] = dev
+}
+
 // NewI2C creates a minimal I2C controller.
 //
 // It models the enable handshake plus the small PIO FIFO behaviour that
-// the kernel driver polls. The emulated bus also has the SC2336 sensor ID
-// registers used by the firmware's camera probe.
+// the kernel driver polls.
 func NewI2C(name string) *I2C {
 	i2c := &I2C{
 		RegisterBlock: NewRegisterBlock(name, 0x1000),
+		devices:       make(map[uint32]I2CDevice),
 	}
 
 	names := map[uint32]string{
@@ -96,13 +110,18 @@ func NewI2C(name string) *I2C {
 	// because the driver only ever polls for the bit rather than timing
 	// how long it takes to appear.
 	var enabled uint32
-	var addrBytes []byte
 	var rxFIFO []uint32
 	i2c.SetWriteFunc(I2C_ENB, func(value uint32) {
 		enabled = value & I2C_ENB_ENABLE
 	})
 	i2c.SetReadFunc(I2C_ENSTA, func() uint32 {
 		return enabled
+	})
+	i2c.SetWriteFunc(I2C_TAR, func(value uint32) {
+		i2c.targetAddr = value
+	})
+	i2c.SetReadFunc(I2C_TAR, func() uint32 {
+		return i2c.targetAddr
 	})
 	i2c.SetWriteFunc(I2C_INTM, func(value uint32) {
 		i2c.intMask = value
@@ -147,16 +166,20 @@ func NewI2C(name string) *I2C {
 		return uint32(len(rxFIFO))
 	})
 	i2c.SetWriteFunc(I2C_DC, func(value uint32) {
+		dev := i2c.devices[i2c.targetAddr]
 		if value&i2cDataCmdRead != 0 {
-			rxFIFO = append(rxFIFO, i2cSensorRegister(addrBytes))
+			var val byte
+			if dev != nil {
+				val = dev.ReadI2C()
+			}
+			rxFIFO = append(rxFIFO, uint32(val))
 			i2c.pending |= i2cIntRXFull
 			i2c.updateInterrupt()
 			return
 		}
 
-		addrBytes = append(addrBytes, byte(value))
-		if len(addrBytes) > 2 {
-			addrBytes = addrBytes[len(addrBytes)-2:]
+		if dev != nil {
+			dev.WriteI2C(byte(value))
 		}
 		i2c.pending |= i2cIntTXEmpty
 		i2c.updateInterrupt()
@@ -185,21 +208,5 @@ func (i *I2C) updateInterrupt() {
 	i.irqState = assert
 	if i.Interrupt != nil {
 		i.Interrupt(assert)
-	}
-}
-
-func i2cSensorRegister(addrBytes []byte) uint32 {
-	if len(addrBytes) < 2 {
-		return 0
-	}
-
-	addr := uint16(addrBytes[len(addrBytes)-2])<<8 | uint16(addrBytes[len(addrBytes)-1])
-	switch addr {
-	case 0x3107:
-		return 0xCB
-	case 0x3108:
-		return 0x3A
-	default:
-		return 0
 	}
 }
