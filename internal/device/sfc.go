@@ -339,6 +339,20 @@ func (s *SFC) erase(start uint32, length uint32) {
 	}
 }
 
+// Reset clears transfer state while preserving flash contents, so a
+// rebooted kernel starts with a clean controller.
+func (s *SFC) Reset() {
+	s.active = false
+	s.done = false
+	s.wel = false
+	s.dmaArmed = false
+	s.remaining = 0
+	s.pending = 0
+	s.addr = 0
+	s.index = 0
+	s.reply = nil
+}
+
 func (s *SFC) status() uint32 {
 	value := s.regs[SFC_SR]
 	if s.active && s.remaining > 0 {

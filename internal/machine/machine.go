@@ -155,6 +155,13 @@ type Machine struct {
 
 	ROM *device.ROM
 
+	// romData holds the original firmware image for re-loading on reboot.
+	romData []byte
+
+	// splBoot indicates the firmware is an Ingenic SPL image, which
+	// needs stack/return-address setup on every boot.
+	splBoot bool
+
 	// UART is UART0, retained as the conventional console handle.
 	UART *device.UART
 
@@ -537,6 +544,8 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		CPU:           c,
 		RAM:           ram,
 		ROM:           rom,
+		romData:       romData,
+		splBoot:       isIngenicSPL,
 		UART:          uart,
 		UARTs:         uarts,
 		CPM:           cpm,
@@ -567,6 +576,35 @@ func (m *Machine) Reset() {
 
 	m.CPU.Reset()
 
+}
+
+// reboot resets the CPU and critical device state so the firmware
+// re-executes from the reset vector, simulating a hardware watchdog
+// reset.
+func (m *Machine) reboot() {
+	m.CPU.Reset()
+
+	// Re-do boot setup (stack pointer, return address for SPL).
+	if len(m.romData) > 0 && m.splBoot {
+		sp := 0x80000000 + SPLLoadAddress + uint32(len(m.romData)) + 0x4000
+		sp = sp &^ 7
+		m.CPU.WriteRegister(29, sp)
+		m.CPU.WriteRegister(31, BootROMReturn)
+	}
+
+	// Clear interrupt controller so stale IRQs don't fire during boot.
+	m.INTC.Reset()
+
+	// Reset OS timer so the kernel programs it from scratch.
+	m.OST.Reset()
+
+	// Clear SFC transfer state (flash contents persist).
+	m.SFC.Reset()
+
+	// Reset RT sync so the fast-forward runs at full speed during boot.
+	m.CPU.ResetSyncClock()
+
+	m.CPU.Running = true
 }
 
 // LoadProgram copies a program into RAM.
@@ -620,6 +658,13 @@ func (m *Machine) Run(maxCycles uint64) uint64 {
 		}
 
 		m.CPU.Step()
+
+		// If the watchdog triggered a reset, reboot and continue.
+		if !m.CPU.Running && m.CPU.HaltReason == cpu.HaltWatchdogReset {
+			m.reboot()
+			start = m.CPU.Cycles
+			maxCycles = 0 // reboot runs indefinitely
+		}
 	}
 
 	m.CPU.Stop()

@@ -428,6 +428,12 @@ func (c *CPU) Step() {
 	c.Cycles++
 }
 
+// ResetSyncClock resets the real-time sync baseline so the fast-forward
+// governor treats the post-reboot execution as a fresh start.
+func (c *CPU) ResetSyncClock() {
+	c.startTime = time.Time{}
+}
+
 // fastForwardTo advances Cycles to nextCycle, optionally sleeping so
 // simulated time stays aligned with wall-clock time.
 //

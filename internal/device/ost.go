@@ -229,6 +229,16 @@ func (o *OST) OST1Expired() bool {
 	return o.expired()
 }
 
+// Reset clears all timer state so a rebooted kernel starts fresh.
+func (o *OST) Reset() {
+	o.origin = 0
+	o.hiBuf = 0
+	o.enable = 0
+	o.period = 0
+	o.nextCompare = 0
+	o.pending = false
+}
+
 // NextExpiryCycle returns the core cycle count at which OST1 will next
 // fire, or 0 if the timer is not armed. This lets the CPU fast-forward
 // through idle WAIT instructions instead of spinning one cycle at a time.
