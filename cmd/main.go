@@ -94,20 +94,24 @@ func main() {
 	}
 
 	blocks := map[string]*device.RegisterBlock{
-		"CPM":    m.CPM,
-		"INTC":   m.INTC.RegisterBlock,
-		"TCU":    m.TCU,
-		"OST":    m.OST.RegisterBlock,
-		"GPIO":   m.GPIO,
-		"I2C0":   m.I2C0.RegisterBlock,
-		"DDRC":   m.DDRC,
-		"DDRP":   m.DDRP,
-		"SFC":    m.SFC.RegisterBlock,
-		"GMAC":   m.GMAC,
-		"DWC2":   m.DWC2,
-		"EFUSE":  m.EFUSE,
-		"MSC":    m.MSC.RegisterBlock,
-		"PERIPH": m.Periph,
+		"CPM":      m.CPM,
+		"INTC":     m.INTC.RegisterBlock,
+		"TCU":      m.TCU,
+		"OST":      m.OST.RegisterBlock,
+		"GPIO":     m.GPIO,
+		"I2C0":     m.I2C0.RegisterBlock,
+		"DDRC":     m.DDRC,
+		"DDRP":     m.DDRP,
+		"SFC":      m.SFC.RegisterBlock,
+		"GMAC":     m.GMAC,
+		"DWC2":     m.DWC2,
+		"EFUSE":    m.EFUSE,
+		"MSC":      m.MSC.RegisterBlock,
+		"ISP_CORE": m.ISPCore,
+		"ISP_IVDC": m.ISPIVDC,
+		"ISP_VIC":  m.ISPVIC,
+		"ISP_CSI":  m.ISPCSI,
+		"PERIPH":   m.Periph,
 	}
 
 	if *traceMMIO {

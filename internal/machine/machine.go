@@ -43,10 +43,6 @@ const (
 	// bank-0 dispatcher adds 8 to the pending bit index before do_IRQ().
 	SFCIRQ uint8 = 7
 
-	// MSC0IRQ is the INTC hardware bit that maps to Linux IRQ 37.
-	// Linux IRQ = INTC HW Bit + 8 => MSC0IRQ = 37 - 8 = 29.
-	MSC0IRQ uint8 = 29
-
 	// UART IRQs. UART1 (ttyS1) maps to Linux IRQ 58.
 	// Linux IRQ = INTC HW Bit + 8 => UART1IRQ = 58 - 8 = 50.
 	UART0IRQ uint8 = 49 // Linux IRQ 57
@@ -81,6 +77,18 @@ const (
 	// DDRPStart is the DDR PHY block.
 	DDRPStart uint32 = 0x134F0000
 	DDRPEnd   uint32 = 0x134FFFFF
+
+	// ISP blocks used by tx-isp-t23.ko. These are mapped explicitly so
+	// camera-driver register access is visible separately from the broad
+	// peripheral catch-all.
+	ISPCoreStart uint32 = 0x13300000
+	ISPCoreEnd   uint32 = 0x1330FFFF
+	ISPIVDCStart uint32 = 0x13200000
+	ISPIVDCEnd   uint32 = 0x1320FFFF
+	ISPVICStart  uint32 = 0x133E0000
+	ISPVICEnd    uint32 = 0x133EFFFF
+	ISPCSIStart  uint32 = 0x10023000
+	ISPCSIEnd    uint32 = 0x10023FFF
 
 	// SFCStart is the serial flash controller.
 	SFCStart uint32 = 0x13440000
@@ -185,6 +193,12 @@ type Machine struct {
 	EFUSE *device.RegisterBlock
 
 	MSC *device.MSC
+
+	// ISP register windows used by the vendor tx_isp_t23 module.
+	ISPCore *device.RegisterBlock
+	ISPIVDC *device.RegisterBlock
+	ISPVIC  *device.RegisterBlock
+	ISPCSI  *device.RegisterBlock
 
 	// Periph is the catch-all covering peripherals with no model yet.
 	// Anything it records is a peripheral the emulator still needs.
@@ -356,13 +370,10 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		}
 	}
 
-	msc0.Interrupt = func(assert bool) {
-		if assert {
-			intc.Assert(MSC0IRQ)
-		} else {
-			intc.Deassert(MSC0IRQ)
-		}
-	}
+	// Do not wire the MSC stub to INTC until the board's real MSC line is
+	// identified. The original tx-isp-t23.ko uses Linux IRQ 37 for ISP core;
+	// routing MSC completion to that line invokes the ISP ISR during module
+	// load before its core register base is ready.
 
 	uartIRQs := []uint8{UART0IRQ, UART1IRQ, UART2IRQ}
 	for i, u := range uarts {
@@ -384,6 +395,18 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 
 	efuse := device.NewEFUSE()
 	b.Map(EFUSEStart, EFUSEEnd, efuse)
+
+	ispCore := device.NewRegisterBlock("ISP_CORE", ISPCoreEnd-ISPCoreStart+1)
+	b.Map(ISPCoreStart, ISPCoreEnd, ispCore)
+
+	ispIVDC := device.NewRegisterBlock("ISP_IVDC", ISPIVDCEnd-ISPIVDCStart+1)
+	b.Map(ISPIVDCStart, ISPIVDCEnd, ispIVDC)
+
+	ispVIC := device.NewRegisterBlock("ISP_VIC", ISPVICEnd-ISPVICStart+1)
+	b.Map(ISPVICStart, ISPVICEnd, ispVIC)
+
+	ispCSI := device.NewRegisterBlock("ISP_CSI", ISPCSIEnd-ISPCSIStart+1)
+	b.Map(ISPCSIStart, ISPCSIEnd, ispCSI)
 
 	// Mapped last so that every specific device above takes precedence.
 	periph := device.NewRegisterBlock("PERIPH", PeriphEnd-PeriphStart+1)
@@ -486,6 +509,10 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		DWC2:          dwc2,
 		EFUSE:         efuse,
 		MSC:           msc0,
+		ISPCore:       ispCore,
+		ISPIVDC:       ispIVDC,
+		ISPVIC:        ispVIC,
+		ISPCSI:        ispCSI,
 		Periph:        periph,
 		Bus:           b,
 		BootROMReturn: BootROMReturn,
