@@ -2,7 +2,7 @@
 
 I built this emulator to run real firmware dumps from Ingenic T23 chips. It is not QEMU. My goal was simple: load a raw firmware image, see where execution hangs, and write just enough hardware emulation to move past that spot.
 
-Right now, my emulator boots all the way through the Linux kernel and launches userspace apps. The Tuya IoT camera software starts up, connects to WiFi, and sets up video buffers. It runs fine until it hits a null pointer crash inside the TX ISP camera driver module.
+Right now, my emulator boots all the way through the Linux kernel and launches userspace apps. The Tuya IoT camera software starts up and gets past TX ISP camera driver probing, including ISP DMA channel setup.
 
 ## what works
 
@@ -24,13 +24,11 @@ Here is what boots successfully:
 * GMAC network reset and MDIO bus scanning
 * Mounting squashfs root filesystem from NOR flash
 * I2C bus detection and SC2336 camera sensor probing
-* Driver initialization for TX ISP, audio codec, VPU, and RTC
-* MSC MMC storage driver and SDHC card detection
+* Driver initialization for TX ISP, audio codec, and VPU
+* TX ISP core probing and DMA channel setup
+* MSC MMC storage driver and SDHC card detection through the polling path
 * Running linuxrc, building dev files with mdev, and setting up zram swap
-* Tuya IoT SDK startup, WiFi connection, and BLE initialization
-* DHCP IP address acquisition and video ring buffer allocation
-
-Execution stops when the TX ISP camera driver (`insmod tx_isp_t23`) triggers a kernel panic. That is the current wall I am working on.
+* Tuya IoT userspace startup beyond the original TX ISP module-load panic
 
 ## hardware model
 
@@ -47,13 +45,14 @@ Here is what I have modeled so far:
 * DDR memory controllers (DDRC and DDRP)
 * I2C controller and SC2336 camera sensor
 * SFC flash controller with SPI NOR flash emulation
+* TX ISP core, IVDC, VIC, and CSI register windows
 * DWC2 USB OTG controller
-* MSC MMC controller with SDHC card support
+* MSC MMC controller with SDHC polling support
 * EFUSE hardware block
 * GMAC network stub and MDIO bus
 * GDB RSP server for remote debugging and stepping
 * squashfs reader support
-* Register stubs for unused memory regions
+* Catch-all register stubs for remaining unused peripheral regions
 
 The SFC flash controller is the most complete piece because UBoot and Linux read from flash constantly.
 
@@ -145,8 +144,9 @@ When execution stops, my emulator prints a register access summary. Hot register
 * [x] Model DWC2 USB controller to prevent boot timeouts
 * [x] Boot to linuxrc init process
 * [x] Support MSC MMC controller and SDHC card detection
-* [x] Run Tuya IoT userspace app and connect WiFi
-* [ ] Fix TX ISP kernel panic in camera driver module
+* [x] Run Tuya IoT userspace beyond TX ISP module initialization
+* [x] Fix TX ISP kernel panic in camera driver module
+* [ ] Model MSC interrupt routing accurately
 * [ ] Replace register stubs with real hardware logic
 * [ ] Speed up boot time without breaking kernel timers
 * [ ] Clean up CPU tests and add boot regression tests
