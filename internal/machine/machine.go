@@ -170,7 +170,7 @@ type Machine struct {
 	INTC *device.INTC
 
 	// TCU is the watchdog, timer/counter and OS timer block.
-	TCU *device.RegisterBlock
+	TCU *device.TCU
 
 	// OST is the Linux OS timer clocksource and tick block.
 	OST *device.OST
@@ -509,6 +509,13 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 	if !options.DisableRTSync {
 		c.CyclesPerSec = 1_188_000_000
 		c.RTSyncEnabled = true
+	}
+
+	// Watchdog reset: when the guest programs the watchdog for an
+	// immediate reset (reboot), halt the CPU.
+	tcu.OnWatchdogReset = func() {
+		c.HaltWith(cpu.HaltWatchdogReset,
+			"watchdog reset (system reboot)")
 	}
 
 	if len(romData) > 0 {
