@@ -112,6 +112,10 @@ type CPU struct {
 	// this to fast-forward Cycles to the next event instead of spinning.
 	NextWakeCycle func() uint64
 
+	// WatchdogCheck is called on every Step(). If it returns true, the
+	// machine halts for a watchdog reset (reboot).
+	WatchdogCheck func() bool
+
 	// LLBit is the load-linked bit set by LL and tested by SC.
 	LLBit bool
 
@@ -322,6 +326,12 @@ func (c *CPU) Step() {
 
 	if c.startTime.IsZero() {
 		c.startTime = time.Now()
+	}
+
+	// Watchdog check — must run even when WAITing so a watchdog timeout
+	// can break out of a reboot spin loop.
+	if c.WatchdogCheck != nil && c.WatchdogCheck() {
+		return
 	}
 
 	if c.Waiting {
