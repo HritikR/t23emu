@@ -222,6 +222,7 @@ type Option func(*MachineOptions)
 type MachineOptions struct {
 	DisableSDCard bool
 	SDCardImage   []byte
+	DisableRTSync bool
 }
 
 // WithSDCardImage sets a custom SD card disk image.
@@ -235,6 +236,18 @@ func WithSDCardImage(image []byte) Option {
 func WithDisableSDCard() Option {
 	return func(o *MachineOptions) {
 		o.DisableSDCard = true
+	}
+}
+
+// WithDisableRTSync disables real-time sync for the idle-loop
+// fast-forward. By default the emulator throttles idle-loop skipping
+// so that simulated time matches wall-clock time once the system is
+// idle, keeping interactive timeouts (e.g. login prompts) accurate.
+// Disabling it gives maximum speed at the cost of those timeouts
+// firing too quickly.
+func WithDisableRTSync() Option {
+	return func(o *MachineOptions) {
+		o.DisableRTSync = true
 	}
 }
 
@@ -488,6 +501,14 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 	}
 	c.NextWakeCycle = func() uint64 {
 		return ost.NextExpiryCycle()
+	}
+
+	// Real-time sync: throttle idle-loop fast-forward once simulated
+	// time catches up to wall-clock time. The T23 CCLK is 1188 MHz,
+	// matching the OST prescaler (792 cycles/tick * 1.5 MHz = 100 Hz).
+	if !options.DisableRTSync {
+		c.CyclesPerSec = 1_188_000_000
+		c.RTSyncEnabled = true
 	}
 
 	if len(romData) > 0 {

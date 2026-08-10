@@ -35,6 +35,7 @@ func main() {
 	gdbWait := flag.Bool("gdb-wait", false, "Pause CPU execution on start until GDB connects")
 	sdcardPath := flag.String("sdcard", "", "Path to optional SD card image file to mount")
 	noSDCard := flag.Bool("no-sdcard", false, "Disable SD card presence in MSC controller")
+	noRTSync := flag.Bool("no-rt-sync", false, "Disable real-time sync for idle-loop fast-forward (login timeouts will fire too quickly)")
 
 	flag.Parse()
 
@@ -71,6 +72,10 @@ func main() {
 		machineOpts = append(machineOpts, machine.WithSDCardImage(sdData))
 	} else {
 		fmt.Println("SD Card: using default empty FAT32 image")
+	}
+	if *noRTSync {
+		machineOpts = append(machineOpts, machine.WithDisableRTSync())
+		fmt.Println("Real-time sync: disabled (idle-loop fast-forward unthrottled)")
 	}
 
 	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize), machineOpts...)

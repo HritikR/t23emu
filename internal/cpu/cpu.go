@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/HritikR/t23emu/internal/bus"
 )
@@ -170,6 +171,23 @@ type CPU struct {
 	// interrupt.
 	idleSpins int
 
+	// Real-time sync throttles the idle-loop fast-forward so that
+	// simulated time does not run ahead of wall-clock time. Without
+	// this, interactive timeouts (e.g. the login prompt) fire in
+	// milliseconds instead of their intended duration.
+	//
+	// CyclesPerSec is the emulated core frequency. The T23 CCLK is
+	// 1188 MHz, matching the OST prescaler ratio (792 cycles/tick at
+	// 1.5 MHz OST clock = 100 Hz kernel tick).
+	//
+	// When RTSyncEnabled is true and simulated time has caught up to
+	// real time, fastForwardTo sleeps for the remaining wall-clock
+	// duration before advancing Cycles. During boot (emulator is
+	// slower than real time) no sleep occurs.
+	CyclesPerSec  uint64
+	RTSyncEnabled bool
+	startTime     time.Time
+
 	// Debugger breakpoints, watchpoints, and single stepping
 	Breakpoints   map[uint32]bool
 	Watchpoints   map[string]Watchpoint
@@ -302,6 +320,10 @@ func (c *CPU) Step() {
 		return
 	}
 
+	if c.startTime.IsZero() {
+		c.startTime = time.Now()
+	}
+
 	if c.Waiting {
 		if pending := c.updateInterruptPending(); pending != 0 {
 			c.Waiting = false
@@ -313,7 +335,7 @@ func (c *CPU) Step() {
 			c.Waiting = false
 			c.Cycles++
 		} else if c.NextWakeCycle != nil && c.NextWakeCycle() > c.Cycles {
-			c.Cycles = c.NextWakeCycle()
+			c.fastForwardTo(c.NextWakeCycle())
 		} else {
 			c.Cycles++
 		}
@@ -380,7 +402,7 @@ func (c *CPU) Step() {
 			c.idleSpins = 0
 			if c.NextWakeCycle != nil {
 				if next := c.NextWakeCycle(); next > c.Cycles {
-					c.Cycles = next
+					c.fastForwardTo(next)
 				}
 			}
 		}
@@ -404,6 +426,37 @@ func (c *CPU) Step() {
 	}
 
 	c.Cycles++
+}
+
+// fastForwardTo advances Cycles to nextCycle, optionally sleeping so
+// simulated time stays aligned with wall-clock time.
+//
+// When real-time sync is enabled and simulated time has caught up to
+// real time, the method sleeps for the remaining wall-clock duration
+// before advancing. During boot the emulator runs slower than the
+// target hardware, so the sleep is zero and the fast-forward is
+// instantaneous. Once the system is idle (e.g. login prompt), the
+// sleep throttles each OST tick to its real 10 ms duration.
+func (c *CPU) fastForwardTo(nextCycle uint64) {
+	if nextCycle <= c.Cycles {
+		return
+	}
+
+	if !c.RTSyncEnabled || c.CyclesPerSec == 0 {
+		c.Cycles = nextCycle
+		return
+	}
+
+	// startTime is set on the first Step() call, so it reflects the
+	// true beginning of emulation including SPL and U-Boot phases.
+	targetReal := c.startTime.Add(time.Duration(
+		float64(nextCycle) / float64(c.CyclesPerSec) * float64(time.Second)))
+
+	if d := time.Until(targetReal); d > 0 {
+		time.Sleep(d)
+	}
+
+	c.Cycles = nextCycle
 }
 
 func (c *CPU) checkInterrupts() bool {
