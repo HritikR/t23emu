@@ -148,6 +148,9 @@ func Disassemble(raw uint32, pc uint32) string {
 	case OP_COP0:
 		return disasmCOP0(inst)
 
+	case OP_COP1:
+		return disasmCOP1(inst, pc)
+
 	case OP_SPECIAL2:
 		return disasmSpecial2(inst)
 
@@ -240,6 +243,19 @@ func disasmSpecial(inst Instruction) string {
 		return "syscall"
 	case FUNCT_BREAK:
 		return "break"
+
+	case FUNCT_TGE:
+		return fmt.Sprintf("tge     %s, %s", reg(inst.Rs), reg(inst.Rt))
+	case FUNCT_TGEU:
+		return fmt.Sprintf("tgeu    %s, %s", reg(inst.Rs), reg(inst.Rt))
+	case FUNCT_TLT:
+		return fmt.Sprintf("tlt     %s, %s", reg(inst.Rs), reg(inst.Rt))
+	case FUNCT_TLTU:
+		return fmt.Sprintf("tltu    %s, %s", reg(inst.Rs), reg(inst.Rt))
+	case FUNCT_TEQ:
+		return fmt.Sprintf("teq     %s, %s", reg(inst.Rs), reg(inst.Rt))
+	case FUNCT_TNE:
+		return fmt.Sprintf("tne     %s, %s", reg(inst.Rs), reg(inst.Rt))
 	}
 
 	if name, ok := aluMnemonics[inst.Funct]; ok {
@@ -334,6 +350,133 @@ func disasmCOP0(inst Instruction) string {
 			return "deret"
 		case COP0CO_WAIT:
 			return "wait"
+		}
+	}
+	return fmt.Sprintf(".word   0x%08x", inst.Raw)
+}
+
+// fpr renders an FPR name like "$f12".
+func fpr(idx uint8) string {
+	return fmt.Sprintf("$f%d", idx&0x1F)
+}
+
+// fmtName returns the mnemonic suffix letter for a COP1 format code.
+func fmtName(format uint8) string {
+	switch format {
+	case COP1_FMT_S:
+		return "s"
+	case COP1_FMT_D:
+		return "d"
+	case COP1_FMT_W:
+		return "w"
+	case COP1_FMT_L:
+		return "l"
+	}
+	return "?"
+}
+
+// cop1ArithMnemonic maps the arithmetic funct field to its mnemonic
+// root. Conversion and conditional-move variants are handled inline
+// because their assembler form is multi-part ("cvt.d.w" etc.).
+var cop1ArithMnemonic = map[uint8]string{
+	COP1_ADD:     "add",
+	COP1_SUB:     "sub",
+	COP1_MUL:     "mul",
+	COP1_DIV:     "div",
+	COP1_SQRT:    "sqrt",
+	COP1_ABS:     "abs",
+	COP1_MOV:     "mov",
+	COP1_NEG:     "neg",
+	COP1_ROUND_W: "round.w",
+	COP1_TRUNC_W: "trunc.w",
+	COP1_CEIL_W:  "ceil.w",
+	COP1_FLOOR_W: "floor.w",
+}
+
+// cop1CondMnemonic maps the compare funct field to its condition suffix.
+var cop1CondMnemonic = map[uint8]string{
+	COP1_C_F: "f", COP1_C_UN: "un", COP1_C_EQ: "eq", COP1_C_UEQ: "ueq",
+	COP1_C_OLT: "olt", COP1_C_ULT: "ult", COP1_C_OLE: "ole", COP1_C_ULE: "ule",
+	COP1_C_SF: "sf", COP1_C_NGLE: "ngle", COP1_C_SEQ: "seq", COP1_C_NGL: "ngl",
+	COP1_C_LT: "lt", COP1_C_NGE: "nge", COP1_C_LE: "le", COP1_C_NGT: "ngt",
+}
+
+func disasmCOP1(inst Instruction, pc uint32) string {
+	branchTarget := uint32(int32(pc+4) + (int32(int16(inst.Immediate)) << 2))
+
+	switch inst.Rs {
+	case COP1_MFC1:
+		return fmt.Sprintf("mfc1    %s, %s", reg(inst.Rt), fpr(inst.Rd))
+	case COP1_CFC1:
+		return fmt.Sprintf("cfc1    %s, $%d", reg(inst.Rt), inst.Rd)
+	case COP1_MTC1:
+		return fmt.Sprintf("mtc1    %s, %s", reg(inst.Rt), fpr(inst.Rd))
+	case COP1_CTC1:
+		return fmt.Sprintf("ctc1    %s, $%d", reg(inst.Rt), inst.Rd)
+	case COP1_BC:
+		tf := inst.Rt & 1
+		nd := inst.Rt & 2
+		cc := (inst.Rt >> 2) & 7
+		name := "bc1"
+		if tf == 0 {
+			name += "f"
+		} else {
+			name += "t"
+		}
+		if nd != 0 {
+			name += "l"
+		}
+		if cc != 0 {
+			name += fmt.Sprintf(" cc=%d", cc)
+		}
+		return fmt.Sprintf("%-7s 0x%08x", name, branchTarget)
+	case COP1_FMT_S, COP1_FMT_D, COP1_FMT_W, COP1_FMT_L:
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+
+		// Compare forms use a different operand layout.
+		if name, ok := cop1CondMnemonic[inst.Funct]; ok {
+			// For C.cond, ft is in shamt and fs in rd.
+			cc := (inst.Rt >> 2) & 7
+			suffix := ""
+			if cc != 0 {
+				suffix = fmt.Sprintf("  ; cc=%d", cc)
+			}
+			return fmt.Sprintf("c.%s.%s %s, %s%s", name, fmtName(inst.Rs),
+				fpr(inst.Rd), fpr(inst.Shamt), suffix)
+		}
+
+		switch inst.Funct {
+		case COP1_CVT_S:
+			return fmt.Sprintf("cvt.s.%s %s, %s", fmtName(inst.Rs), fpr(fd), fpr(fs))
+		case COP1_CVT_D:
+			return fmt.Sprintf("cvt.d.%s %s, %s", fmtName(inst.Rs), fpr(fd), fpr(fs))
+		case COP1_CVT_W:
+			return fmt.Sprintf("cvt.w.%s %s, %s", fmtName(inst.Rs), fpr(fd), fpr(fs))
+		case COP1_MOVCF:
+			tf := inst.Rt & 1
+			cc := (inst.Rt >> 1) & 7
+			suffix := "f"
+			if tf == 1 {
+				suffix = "t"
+			}
+			return fmt.Sprintf("mov%s.%s %s, %s cc=%d", suffix, fmtName(inst.Rs), fpr(fd), fpr(fs), cc)
+		case COP1_MOVZ:
+			return fmt.Sprintf("movz.%s %s, %s, %s", fmtName(inst.Rs), fpr(fd), fpr(fs), reg(inst.Rt))
+		case COP1_MOVN:
+			return fmt.Sprintf("movn.%s %s, %s, %s", fmtName(inst.Rs), fpr(fd), fpr(fs), reg(inst.Rt))
+		}
+
+		if name, ok := cop1ArithMnemonic[inst.Funct]; ok {
+			// Conversion and unary ops use only fd and fs; binary ops also take ft.
+			unary := inst.Funct == COP1_SQRT || inst.Funct == COP1_ABS ||
+				inst.Funct == COP1_MOV || inst.Funct == COP1_NEG ||
+				(inst.Funct >= COP1_ROUND_W && inst.Funct <= COP1_FLOOR_W)
+			if unary {
+				return fmt.Sprintf("%s.%s %s, %s", name, fmtName(inst.Rs), fpr(fd), fpr(fs))
+			}
+			return fmt.Sprintf("%s.%s %s, %s, %s", name, fmtName(inst.Rs), fpr(fd), fpr(fs), fpr(ft))
 		}
 	}
 	return fmt.Sprintf(".word   0x%08x", inst.Raw)
