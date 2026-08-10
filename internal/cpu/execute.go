@@ -1,5 +1,7 @@
 package cpu
 
+import "math"
+
 // Execute runs a decoded instruction.
 func (c *CPU) Execute(inst Instruction) {
 
@@ -111,18 +113,34 @@ func (c *CPU) Execute(inst Instruction) {
 		c.executeLL(inst)
 
 	case OP_LWC1:
+		if !c.cop1Usable() {
+			c.coprocessorUnusable(1)
+			break
+		}
 		c.executeLWC1(inst)
 
 	case OP_LDC1:
+		if !c.cop1Usable() {
+			c.coprocessorUnusable(1)
+			break
+		}
 		c.executeLDC1(inst)
 
 	case OP_SC:
 		c.executeSC(inst)
 
 	case OP_SWC1:
+		if !c.cop1Usable() {
+			c.coprocessorUnusable(1)
+			break
+		}
 		c.executeSWC1(inst)
 
 	case OP_SDC1:
+		if !c.cop1Usable() {
+			c.coprocessorUnusable(1)
+			break
+		}
 		c.executeSDC1(inst)
 
 	case OP_CACHE:
@@ -136,13 +154,17 @@ func (c *CPU) Execute(inst Instruction) {
 		c.executeCOP0(inst)
 
 	case OP_COP1:
+		if !c.cop1Usable() {
+			c.coprocessorUnusable(1)
+			break
+		}
 		c.executeCOP1(inst)
 
 	case OP_COP2:
 		c.coprocessorUnusable(inst.Opcode - OP_COP0)
 
 	default:
-		c.Exception(EXC_RI, 0)
+		c.reservedInstruction(inst)
 	}
 }
 
@@ -255,7 +277,7 @@ func (c *CPU) executeRType(inst Instruction) {
 		c.Exception(EXC_BP, 0)
 
 	default:
-		c.Exception(EXC_RI, 0)
+		c.reservedInstruction(inst)
 	}
 }
 
@@ -291,7 +313,7 @@ func (c *CPU) executeRegimm(inst Instruction) {
 		c.conditionalBranch(rs >= 0, inst)
 
 	default:
-		c.Exception(EXC_RI, 0)
+		c.reservedInstruction(inst)
 	}
 }
 
@@ -348,7 +370,7 @@ func (c *CPU) executeSpecial2(inst Instruction) {
 		c.retire()
 
 	default:
-		c.Exception(EXC_RI, 0)
+		c.reservedInstruction(inst)
 	}
 }
 
@@ -363,7 +385,7 @@ func (c *CPU) executeSpecial3(inst Instruction) {
 		pos := uint32(inst.Shamt)
 		size := uint32(inst.Rd) + 1
 		if pos+size > 32 {
-			c.Exception(EXC_RI, 0)
+			c.reservedInstruction(inst)
 			return
 		}
 		value := c.ReadRegister(inst.Rs) >> pos
@@ -378,7 +400,7 @@ func (c *CPU) executeSpecial3(inst Instruction) {
 		pos := uint32(inst.Shamt)
 		msb := uint32(inst.Rd)
 		if msb < pos || msb > 31 {
-			c.Exception(EXC_RI, 0)
+			c.reservedInstruction(inst)
 			return
 		}
 		size := msb - pos + 1
@@ -406,22 +428,46 @@ func (c *CPU) executeSpecial3(inst Instruction) {
 			c.WriteRegister(inst.Rd, uint32(int32(int16(rt))))
 			c.retire()
 		default:
-			c.Exception(EXC_RI, 0)
+			c.reservedInstruction(inst)
 		}
 
 	case FUNCT3_RDHWR:
 		c.executeRDHWR(inst)
 
 	default:
-		c.Exception(EXC_RI, 0)
+		c.reservedInstruction(inst)
 	}
 }
 
 // executeRDHWR reads a hardware register. Only the registers a boot
 // loader plausibly touches are provided.
 func (c *CPU) executeRDHWR(inst Instruction) {
+	// Enforce the HWRENA permission gate for user-mode accesses. When
+	// HWRENA[rd] is 0, rdhwr traps as RI and the kernel's RI handler
+	// emulates it (reading tp_value from thread_info for $29, etc.).
 	if c.CurrentPC < 0x80000000 && c.CP0[CP0_HWRENA]&(uint32(1)<<inst.Rd) == 0 {
-		c.Exception(EXC_RI, 0)
+		// Fast path for rdhwr $29 (TLS pointer): if we've cached a
+		// non-zero UserLocal AND the ASID matches (same process),
+		// return it directly.
+		if inst.Rd == 29 && c.UserLocal != 0 {
+			currentASID := c.CP0[CP0_ENTRYHI] & 0xFF
+			if currentASID == c.cachedTLSASID {
+				c.WriteRegister(inst.Rt, c.UserLocal)
+				c.retire()
+				return
+			}
+			// ASID changed — context switch detected. Fall
+			// through to re-trap and refresh the cache.
+			c.UserLocal = 0
+		}
+		// For rdhwr $29, mark this as pending so that when the kernel
+		// finishes emulating it (returns via eret) we can observe the
+		// value and cache it.
+		if inst.Rd == 29 {
+			c.pendingTLSPC = c.CurrentPC
+			c.pendingTLSRt = inst.Rt
+		}
+		c.reservedInstruction(inst)
 		return
 	}
 
@@ -437,7 +483,7 @@ func (c *CPU) executeRDHWR(inst Instruction) {
 	case 29: // UserLocal/TLS pointer
 		c.WriteRegister(inst.Rt, c.UserLocal)
 	default:
-		c.Exception(EXC_RI, 0)
+		c.reservedInstruction(inst)
 		return
 	}
 	c.retire()
@@ -465,6 +511,96 @@ func countLeadingZeros(value uint32) uint32 {
 func (c *CPU) coprocessorUnusable(unit uint8) {
 	c.CP0[CP0_CAUSE] = (c.CP0[CP0_CAUSE] & ^CAUSE_CE) | (uint32(unit) << 28)
 	c.Exception(EXC_CPU, 0)
+}
+
+// cop1Usable reports whether the COP1 (FPU) may be accessed from the
+// current privilege level. CU1 grants access unconditionally; EXL or ERL
+// (exception/error mode) also grants access so the kernel's FPU trap
+// handler can save/restore state. Kernel mode (KSU=0) also permits
+// access, matching many MIPS implementations that allow the kernel to
+// use CP1 without explicitly setting CU1.
+func (c *CPU) cop1Usable() bool {
+	status := c.CP0[CP0_STATUS]
+	if status&STATUS_CU1 != 0 {
+		return true
+	}
+	if status&(STATUS_EXL|STATUS_ERL) != 0 {
+		return true
+	}
+	return status&STATUS_KSU == 0
+}
+
+// readFPR_S reads FPR[idx] as a single-precision float.
+func (c *CPU) readFPR_S(idx uint8) float32 {
+	return math.Float32frombits(c.FPR[idx&31])
+}
+
+// writeFPR_S writes a single-precision float into FPR[idx].
+func (c *CPU) writeFPR_S(idx uint8, v float32) {
+	c.FPR[idx&31] = math.Float32bits(v)
+}
+
+// readFPR_D reads the even/odd lane pair at FPR[idx] as a double.
+// MIPS requires idx to be even for double access; the LSB is masked so
+// that an odd index silently aliases to the previous register, matching
+// the behaviour of the FR=0 FPR register file used by 32-bit MIPS.
+func (c *CPU) readFPR_D(idx uint8) float64 {
+	base := idx & 30
+	bits := uint64(c.FPR[base]) | uint64(c.FPR[base+1])<<32
+	return math.Float64frombits(bits)
+}
+
+// writeFPR_D writes a double into the even/odd lane pair at FPR[idx].
+func (c *CPU) writeFPR_D(idx uint8, v float64) {
+	base := idx & 30
+	bits := math.Float64bits(v)
+	c.FPR[base] = uint32(bits)
+	c.FPR[base+1] = uint32(bits >> 32)
+}
+
+// readFPR_W reads FPR[idx] as a 32-bit signed integer (the W format).
+func (c *CPU) readFPR_W(idx uint8) int32 {
+	return int32(c.FPR[idx&31])
+}
+
+// writeFPR_W writes a 32-bit signed integer into FPR[idx] (the W format).
+func (c *CPU) writeFPR_W(idx uint8, v int32) {
+	c.FPR[idx&31] = uint32(v)
+}
+
+// fccBit returns the FCSR bit mask for condition code cc. FCC0 lives at
+// FCSR bit 23 and FCC1..FCC7 occupy the next seven bits upward.
+func fccBit(cc uint8) uint32 {
+	return uint32(1) << (23 + cc&7)
+}
+
+// readFCC returns condition code cc from FCSR.
+func (c *CPU) readFCC(cc uint8) bool {
+	return c.FCSR&fccBit(cc) != 0
+}
+
+// setFCC writes condition code cc into FCSR.
+func (c *CPU) setFCC(cc uint8, v bool) {
+	if v {
+		c.FCSR |= fccBit(cc)
+	} else {
+		c.FCSR &^= fccBit(cc)
+	}
+}
+
+// roundWithMode rounds a double to a 32-bit signed integer using the
+// rounding mode selected by FCSR.RM. Used by cvt.w.fmt.
+func (c *CPU) roundWithMode(v float64) int32 {
+	switch c.FCSR & FCSR_RMMASK {
+	case FP_RZ:
+		return int32(math.Trunc(v))
+	case FP_RP:
+		return int32(math.Ceil(v))
+	case FP_RM:
+		return int32(math.Floor(v))
+	default: // FP_RN
+		return int32(math.RoundToEven(v))
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -848,11 +984,127 @@ func (c *CPU) conditionalBranchLikely(cond bool, inst Instruction) {
 	c.retire()
 }
 
+// tryFastDelayLoop detects the kernel's __delay() busy-wait loop and
+// fast-forwards through it. The genuine delay-loop pattern uses plain
+// volatile loads/stores as compiler barriers — NEVER LL/SC, which are
+// atomic operations. We must reject LL/SC loops to avoid corrupting
+// atomic_inc, spin_lock, and similar primitives.
+//
+// Genuine delay pattern:
+//
+//	target:   lw/lwc1  $tN, off($base)    ; volatile barrier load
+//	target+4: addiu    $v1, $v1, 1         ; 0x24630001
+//	target+8: sw/swc1  $tN, off($base)    ; volatile barrier store
+//	target+C: beq      $v1, $zero, target  ; backward branch
+//	target+10: nop                         ; delay slot
+func (c *CPU) tryFastDelayLoop(inst Instruction) bool {
+	if inst.Rs != 3 || inst.Rt != 0 {
+		return false
+	}
+
+	v1 := c.ReadRegister(3)
+	if v1 == 0 {
+		return false
+	}
+
+	target := c.branchTargetOf(inst)
+
+	// Must be a tight backward branch. Only the 3-instruction body
+	// (target+0, target+4, target+8) + branch at CurrentPC is supported.
+	if c.CurrentPC-target != 12 {
+		return false
+	}
+
+	// Check addiu $v1, $v1, 1 at target+4.
+	if c.Bus.Read32(target+4) != 0x24630001 {
+		return false
+	}
+
+	// Reject LL/SC atomic loops. Load at target must be LW(0x23) or
+	// LWC1(0x31), NOT LL(0x30). Store at target+8 must be SW(0x2B) or
+	// SWC1(0x39), NOT SC(0x38).
+	loadRaw := c.Bus.Read32(target)
+	loadOp := (loadRaw >> 26) & 0x3F
+	if loadOp != uint32(OP_LW) && loadOp != uint32(OP_LWC1) {
+		return false
+	}
+
+	storeRaw := c.Bus.Read32(target + 8)
+	storeOp := (storeRaw >> 26) & 0x3F
+	if storeOp != uint32(OP_SW) && storeOp != uint32(OP_SWC1) {
+		return false
+	}
+
+	// This is a delay loop. v1 wraps to 0 after (2^32 - v1) more increments.
+	remaining := uint64(uint32(-int32(v1)))
+
+	// Each iteration is 5 instructions (load, addiu, store, beq, nop).
+	c.Cycles += remaining * 5
+
+	// Exit the loop.
+	c.WriteRegister(3, 0)
+
+	return true
+}
+
 func (c *CPU) executeBEQ(inst Instruction) {
+	if c.tryFastDelayLoop(inst) {
+		c.retire()
+		return
+	}
 	c.conditionalBranch(c.ReadRegister(inst.Rs) == c.ReadRegister(inst.Rt), inst)
 }
 
+// tryFastDelayBNE detects the standard MIPS __delay() function:
+//
+//	__delay:
+//	  bne  $R, $zero, __delay    ; self-branch (offset = -1)
+//	  addiu $R, $R, -1           ; delay slot: decrement counter
+//	  jr   $ra
+//	  nop
+//
+// When detected with $R != 0, advance Cycles by $R × 2 and set $R = 0
+// so the branch falls through.  The delay slot still executes normally
+// (decrementing $R to 0xFFFFFFFF), which matches real hardware behavior.
+func (c *CPU) tryFastDelayBNE(inst Instruction) bool {
+	if inst.Rt != 0 || inst.Rs == 0 {
+		return false
+	}
+
+	offset := int32(int16(inst.Immediate))
+	if offset != -1 {
+		return false
+	}
+
+	regIdx := inst.Rs
+	regVal := c.ReadRegister(regIdx)
+	if regVal == 0 {
+		return false
+	}
+
+	// Verify the delay slot is addiu $R, $R, -1.
+	delayRaw := c.Bus.Read32(c.CurrentPC + 4)
+	expectedDelay := uint32(OP_ADDIU)<<26 |
+		uint32(regIdx)<<21 | uint32(regIdx)<<16 | 0xFFFF
+	if delayRaw != expectedDelay {
+		return false
+	}
+
+	// Each iteration: BNE + ADDIU delay slot = 2 cycles.
+	// The current BNE and its delay slot will execute normally (the exit
+	// iteration), so we only advance for the skipped iterations.
+	c.Cycles += uint64(regVal) * 2
+
+	c.WriteRegister(regIdx, 0)
+
+	return true
+}
+
 func (c *CPU) executeBNE(inst Instruction) {
+	if c.tryFastDelayBNE(inst) {
+		c.retire()
+		return
+	}
 	c.conditionalBranch(c.ReadRegister(inst.Rs) != c.ReadRegister(inst.Rt), inst)
 }
 
@@ -1245,20 +1497,22 @@ func (c *CPU) executeCOP0(inst Instruction) {
 			c.readIndexedTLB(int(c.CP0[CP0_INDEX] & 31))
 			c.retire()
 		case COP0CO_TLBWI:
+			c.TLBWI++
 			c.writeIndexedTLB(int(c.CP0[CP0_INDEX] & 31))
 			c.retire()
 		case COP0CO_TLBWR:
+			c.TLBWR++
 			c.writeIndexedTLB(c.randomTLBIndex())
 			c.retire()
 		case COP0CO_TLBP:
 			c.probeTLB()
 			c.retire()
 		default:
-			c.Exception(EXC_RI, 0)
+			c.reservedInstruction(inst)
 		}
 
 	default:
-		c.Exception(EXC_RI, 0)
+		c.reservedInstruction(inst)
 	}
 }
 
@@ -1272,8 +1526,19 @@ func (c *CPU) executeCOP1(inst Instruction) {
 		c.retire()
 	case COP1_CFC1:
 		switch inst.Rd {
-		case 0:
-			c.WriteRegister(inst.Rt, 0)
+	case 0:
+		// FIR: advertise FPU with S (14), D (15), and W (16) format
+		// support, no paired single, no fused multiply-add.
+		c.WriteRegister(inst.Rt, 0x0001C000)
+		case 25:
+			// FEXR: cause/flags lower half.
+			c.WriteRegister(inst.Rt, c.FCSR&(FCSR_CAUSE|FCSR_FLAGS))
+		case 26:
+			// FENR: enables plus rounding mode, and FCC1..FCC7.
+			c.WriteRegister(inst.Rt, c.FCSR&(FCSR_ENABLE|FCSR_RMMASK|FCSR_ALLFCC&^FCSR_FCC0))
+		case 28:
+			// FCCR: FCC0 plus the enables and rounding mode.
+			c.WriteRegister(inst.Rt, c.FCSR&(FCSR_FCC0|FCSR_ENABLE|FCSR_RMMASK))
 		case 31:
 			c.WriteRegister(inst.Rt, c.FCSR)
 		default:
@@ -1281,12 +1546,32 @@ func (c *CPU) executeCOP1(inst Instruction) {
 		}
 		c.retire()
 	case COP1_CTC1:
-		if inst.Rd == 31 {
-			c.FCSR = c.ReadRegister(inst.Rt)
+		switch inst.Rd {
+		case 25:
+			c.FCSR = (c.FCSR & ^(FCSR_CAUSE | FCSR_FLAGS)) | (c.ReadRegister(inst.Rt) & (FCSR_CAUSE | FCSR_FLAGS))
+		case 26:
+			c.FCSR = (c.FCSR & ^(FCSR_ENABLE | FCSR_RMMASK | FCSR_ALLFCC&^FCSR_FCC0)) |
+				(c.ReadRegister(inst.Rt) & (FCSR_ENABLE | FCSR_RMMASK | FCSR_ALLFCC&^FCSR_FCC0))
+		case 28:
+			c.FCSR = (c.FCSR & ^(FCSR_FCC0 | FCSR_ENABLE | FCSR_RMMASK)) |
+				(c.ReadRegister(inst.Rt) & (FCSR_FCC0 | FCSR_ENABLE | FCSR_RMMASK))
+		case 31:
+			// Reserved/cause bits stay writable for the kernel's FP context
+			// save/restore path. Cause.E is read-only-zero in hardware but
+			// ignoring that is harmless.
+			c.FCSR = c.ReadRegister(inst.Rt) & 0xFFF8FFFF
 		}
 		c.retire()
+	case COP1_BC:
+		c.executeCOP1Branch(inst)
+	case COP1_FMT_S, COP1_FMT_D, COP1_FMT_W, COP1_FMT_L:
+		if inst.Funct >= COP1_C_F {
+			c.executeCOP1Compare(inst)
+		} else {
+			c.executeCOP1Arith(inst)
+		}
 	default:
-		c.Exception(EXC_RI, 0)
+		c.reservedInstruction(inst)
 	}
 }
 
@@ -1359,9 +1644,354 @@ func (c *CPU) executeERET(inst Instruction) {
 
 	c.NextPC = c.PC + 4
 
+	// If the kernel just handled a rdhwr $29 RI trap, observe the TLS
+	// value it wrote to the destination register and cache it so future
+	// rdhwr $29 calls return instantly without trapping.
+	if c.pendingTLSPC != 0 {
+		// Only cache if eret returns to the rdhwr site (or within
+		// a few instructions of it, accounting for delay slots).
+		if c.PC >= c.pendingTLSPC && c.PC <= c.pendingTLSPC+8 {
+			tlsValue := c.Regs[c.pendingTLSRt]
+			if tlsValue != 0 {
+				c.UserLocal = tlsValue
+				c.cachedTLSASID = c.CP0[CP0_ENTRYHI] & 0xFF
+			}
+		}
+		c.pendingTLSPC = 0
+	}
+
 	// ERET is not a branch and has no delay slot.
 	c.branchTaken = false
 	c.LLBit = false
 
 	c.retire()
+}
+
+// ---------------------------------------------------------------------
+// Floating-point unit (COP1)
+// ---------------------------------------------------------------------
+
+// executeCOP1Branch implements BC1F/BC1T and their likely variants. The
+// cc field selects which FCC bit to test, nd selects the "likely" form
+// (nullify delay slot when not taken), and tf selects true vs false.
+func (c *CPU) executeCOP1Branch(inst Instruction) {
+	tf := inst.Rt&1 == 1
+	nd := inst.Rt&2 != 0
+	cc := uint8(inst.Rt>>2) & 7
+
+	cond := c.readFCC(cc) == tf
+
+	if nd {
+		c.conditionalBranchLikely(cond, inst)
+	} else {
+		c.conditionalBranch(cond, inst)
+	}
+}
+
+// executeCOP1Arith handles a fmt-formatted arithmetic, conversion, or
+// conditional-move instruction. Only S/D source formats and W target for
+// fixed-point conversion are supported; L format is reserved.
+func (c *CPU) executeCOP1Arith(inst Instruction) {
+	ft := inst.Rt
+	fs := inst.Rd
+	fd := inst.Shamt
+	fmt := inst.Rs
+
+	switch inst.Funct {
+	case COP1_ADD:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_S(fd, c.readFPR_S(fs)+c.readFPR_S(ft))
+		case COP1_FMT_D:
+			c.writeFPR_D(fd, c.readFPR_D(fs)+c.readFPR_D(ft))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_SUB:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_S(fd, c.readFPR_S(fs)-c.readFPR_S(ft))
+		case COP1_FMT_D:
+			c.writeFPR_D(fd, c.readFPR_D(fs)-c.readFPR_D(ft))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_MUL:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_S(fd, c.readFPR_S(fs)*c.readFPR_S(ft))
+		case COP1_FMT_D:
+			c.writeFPR_D(fd, c.readFPR_D(fs)*c.readFPR_D(ft))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_DIV:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_S(fd, c.readFPR_S(fs)/c.readFPR_S(ft))
+		case COP1_FMT_D:
+			c.writeFPR_D(fd, c.readFPR_D(fs)/c.readFPR_D(ft))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_SQRT:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_S(fd, float32(math.Sqrt(float64(c.readFPR_S(fs)))))
+		case COP1_FMT_D:
+			c.writeFPR_D(fd, math.Sqrt(c.readFPR_D(fs)))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_ABS:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_S(fd, float32(math.Abs(float64(c.readFPR_S(fs)))))
+		case COP1_FMT_D:
+			c.writeFPR_D(fd, math.Abs(c.readFPR_D(fs)))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_MOV:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_S(fd, c.readFPR_S(fs))
+		case COP1_FMT_D:
+			c.writeFPR_D(fd, c.readFPR_D(fs))
+		case COP1_FMT_W:
+			c.writeFPR_W(fd, c.readFPR_W(fs))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_NEG:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_S(fd, -c.readFPR_S(fs))
+		case COP1_FMT_D:
+			c.writeFPR_D(fd, -c.readFPR_D(fs))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_ROUND_W:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_W(fd, int32(math.RoundToEven(float64(c.readFPR_S(fs)))))
+		case COP1_FMT_D:
+			c.writeFPR_W(fd, int32(math.RoundToEven(c.readFPR_D(fs))))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_TRUNC_W:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_W(fd, int32(math.Trunc(float64(c.readFPR_S(fs)))))
+		case COP1_FMT_D:
+			c.writeFPR_W(fd, int32(math.Trunc(c.readFPR_D(fs))))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_CEIL_W:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_W(fd, int32(math.Ceil(float64(c.readFPR_S(fs)))))
+		case COP1_FMT_D:
+			c.writeFPR_W(fd, int32(math.Ceil(c.readFPR_D(fs))))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_FLOOR_W:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_W(fd, int32(math.Floor(float64(c.readFPR_S(fs)))))
+		case COP1_FMT_D:
+			c.writeFPR_W(fd, int32(math.Floor(c.readFPR_D(fs))))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_CVT_S:
+		switch fmt {
+		case COP1_FMT_D:
+			c.writeFPR_S(fd, float32(c.readFPR_D(fs)))
+		case COP1_FMT_W:
+			c.writeFPR_S(fd, float32(c.readFPR_W(fs)))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_CVT_D:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_D(fd, float64(c.readFPR_S(fs)))
+		case COP1_FMT_W:
+			c.writeFPR_D(fd, float64(c.readFPR_W(fs)))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_CVT_W:
+		switch fmt {
+		case COP1_FMT_S:
+			c.writeFPR_W(fd, c.roundWithMode(float64(c.readFPR_S(fs))))
+		case COP1_FMT_D:
+			c.writeFPR_W(fd, c.roundWithMode(c.readFPR_D(fs)))
+		default:
+			c.reservedInstruction(inst)
+			return
+		}
+	case COP1_MOVCF:
+		// movt/movf: tf lives in bit 16 (Rt[0]). cc lives in bits 20:18
+		// (Rt[4:2]). Bit 17 (Rt[1]) is always 0.
+		if fmt != COP1_FMT_S && fmt != COP1_FMT_D {
+			c.reservedInstruction(inst)
+			return
+		}
+		tf := inst.Rt&1 == 1
+		cc := uint8(inst.Rt>>2) & 7
+		if c.readFCC(cc) == tf {
+			switch fmt {
+			case COP1_FMT_S:
+				c.writeFPR_S(fd, c.readFPR_S(fs))
+			case COP1_FMT_D:
+				c.writeFPR_D(fd, c.readFPR_D(fs))
+			}
+		}
+	case COP1_MOVZ:
+		if c.ReadRegister(inst.Rt) == 0 {
+			switch fmt {
+			case COP1_FMT_S:
+				c.writeFPR_S(fd, c.readFPR_S(fs))
+			case COP1_FMT_D:
+				c.writeFPR_D(fd, c.readFPR_D(fs))
+			default:
+				c.reservedInstruction(inst)
+				return
+			}
+		}
+	case COP1_MOVN:
+		if c.ReadRegister(inst.Rt) != 0 {
+			switch fmt {
+			case COP1_FMT_S:
+				c.writeFPR_S(fd, c.readFPR_S(fs))
+			case COP1_FMT_D:
+				c.writeFPR_D(fd, c.readFPR_D(fs))
+			default:
+				c.reservedInstruction(inst)
+				return
+			}
+		}
+	default:
+		c.reservedInstruction(inst)
+		return
+	}
+	c.retire()
+}
+
+// executeCOP1Compare implements C.cond.fmt. The 16 MIPS predicates are
+// the truth-table expansion of (less, equal, unordered) raised to the
+// IEEE-754 predicate table. Signaling predicates additionally set the
+// Invalid cause when either operand is NaN.
+func (c *CPU) executeCOP1Compare(inst Instruction) {
+	// C.cond.fmt encoding: ft in bits [20:16] (Rt), fs in bits [15:11]
+	// (Rd), cc in bits [10:8] (Shamt >> 2). This is the same ft/fs layout
+	// as arithmetic instructions; cc replaces the fd field.
+	fs := inst.Rd
+	ft := inst.Rt
+	cc := uint8(inst.Shamt>>2) & 7
+
+	var aD, bD float64
+	var aS, bS float32
+	switch inst.Rs {
+	case COP1_FMT_S:
+		aS = c.readFPR_S(fs)
+		bS = c.readFPR_S(ft)
+	case COP1_FMT_D:
+		aD = c.readFPR_D(fs)
+		bD = c.readFPR_D(ft)
+	default:
+		c.reservedInstruction(inst)
+		return
+	}
+
+	var unordered, less, equal bool
+	switch inst.Rs {
+	case COP1_FMT_S:
+		if math32IsNaN(aS) || math32IsNaN(bS) {
+			unordered = true
+		} else {
+			less = aS < bS
+			equal = aS == bS
+		}
+	case COP1_FMT_D:
+		if math.IsNaN(aD) || math.IsNaN(bD) {
+			unordered = true
+		} else {
+			less = aD < bD
+			equal = aD == bD
+		}
+	}
+
+	var result bool
+	signaling := false
+	switch inst.Funct {
+	case COP1_C_F:
+		result = false
+	case COP1_C_UN:
+		result = unordered
+	case COP1_C_EQ:
+		result = equal
+	case COP1_C_UEQ:
+		result = equal || unordered
+	case COP1_C_OLT:
+		result = less
+	case COP1_C_ULT:
+		result = less || unordered
+	case COP1_C_OLE:
+		result = less || equal
+	case COP1_C_ULE:
+		result = less || equal || unordered
+	case COP1_C_SF:
+		result, signaling = false, true
+	case COP1_C_NGLE:
+		result, signaling = unordered, true
+	case COP1_C_SEQ:
+		result, signaling = equal, true
+	case COP1_C_NGL:
+		result, signaling = equal || unordered, true
+	case COP1_C_LT:
+		result, signaling = less, true
+	case COP1_C_NGE:
+		result, signaling = less || unordered, true
+	case COP1_C_LE:
+		result, signaling = less || equal, true
+	case COP1_C_NGT:
+		result, signaling = less || equal || unordered, true
+	default:
+		c.reservedInstruction(inst)
+		return
+	}
+
+	if signaling && unordered {
+		c.FCSR |= FCSR_CAUSE_V | (FCSR_CAUSE_V >> 5) // cause + flag
+	}
+
+	c.setFCC(cc, result)
+	c.retire()
+}
+
+// math32IsNaN reports whether v is NaN without dragging the runtime's
+// reflection-based isNaN path through float64 conversion.
+func math32IsNaN(v float32) bool {
+	return v != v
 }

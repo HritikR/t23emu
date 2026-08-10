@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/HritikR/t23emu/internal/bus"
 )
+
+const HistorySize = 512
 
 type CPU struct {
 	// General purpose registers
@@ -87,6 +91,12 @@ type CPU struct {
 	// TLB contains the CP0-managed virtual mappings used by kuseg/kseg2.
 	TLB [32]TLBEntry
 
+	// TLB statistics for the debug report.
+	TLBHits   uint64
+	TLBMisses uint64
+	TLBWI     uint64
+	TLBWR     uint64
+
 	// InterruptPending returns CP0 Cause.IP bits currently asserted by
 	// external interrupt hardware.
 	InterruptPending func() uint32
@@ -95,8 +105,37 @@ type CPU struct {
 	// the core from WAIT without necessarily being a deliverable interrupt.
 	WakePending func() bool
 
+	// NextWakeCycle returns the cycle count of the earliest pending wake
+	// event (e.g. the next OST tick), or 0 if none. When the CPU is
+	// WAITing and no interrupt is immediately deliverable, Step() uses
+	// this to fast-forward Cycles to the next event instead of spinning.
+	NextWakeCycle func() uint64
+
 	// LLBit is the load-linked bit set by LL and tested by SC.
 	LLBit bool
+
+	// TLS caching: when the kernel emulates rdhwr $29 via an RI trap,
+	// we observe the value it writes and cache it so subsequent calls
+	// return instantly without trapping. pendingTLSRt is the register
+	// the kernel will write; 0 means no pending observation.
+	// cachedTLSASID records the ASID (EntryHi bits 7:0) of the process
+	// whose TLS we cached; if a context switch changes the ASID, the
+	// cache is invalidated automatically.
+	pendingTLSPC    uint32
+	pendingTLSRt    uint8
+	cachedTLSASID   uint32
+
+	// RITraceOut, when non-nil, receives one line per Reserved
+	// Instruction exception with the faulting PC, raw word, decoded
+	// fields, and a disassembly. Booting real firmware can otherwise
+	// surface unimplemented instructions only as kernel "Illegal
+	// instruction" messages, with no indication of the offending opcode.
+	RITraceOut io.Writer
+	riCounters map[string]*RICounter
+
+	// TraceADE, when set, halts on the first userspace AdEL/AdES
+	// exception and dumps the instruction, registers, and history.
+	TraceADE bool
 
 	// Instruction tracing
 	Trace bool
@@ -115,8 +154,8 @@ type CPU struct {
 	// the original fault.
 	MaxExceptionRun int
 
-	// Instruction execution history (saved last 40 instructions)
-	History          [40]HistoryEntry
+	// Instruction execution history (saved last HistorySize instructions)
+	History          [HistorySize]HistoryEntry
 	HistoryIndex     int
 	HistoryFull      bool
 	RecordHistory    bool
@@ -143,6 +182,17 @@ type Watchpoint struct {
 	Addr uint32
 	Len  uint32
 	Type WatchpointType
+}
+
+// RICounter tallies Reserved Instruction exceptions that share a key.
+// The key groups together identical encodings (opcode/funct/register
+// fields) so the summary can distinguish one missing instruction from a
+// flood of identical traps.
+type RICounter struct {
+	Count  uint64
+	LastPC uint32
+	Raw    uint32
+	Key    string
 }
 
 // New creates a new CPU instance
@@ -251,10 +301,15 @@ func (c *CPU) Step() {
 			if c.interruptEnabled(pending) {
 				c.takeInterrupt()
 			}
+			c.Cycles++
 		} else if c.WakePending != nil && c.WakePending() {
 			c.Waiting = false
+			c.Cycles++
+		} else if c.NextWakeCycle != nil && c.NextWakeCycle() > c.Cycles {
+			c.Cycles = c.NextWakeCycle()
+		} else {
+			c.Cycles++
 		}
-		c.Cycles++
 		return
 	}
 
@@ -426,6 +481,60 @@ func (c *CPU) nullifyDelaySlot() {
 	c.NextPC = c.PC + 4
 }
 
+// EnableRITrace enables logging of every Reserved Instruction exception
+// to w and starts a fresh per-key tally. Pass nil to disable. The tally
+// is kept in memory so it is lost if the process is killed without a
+// clean shutdown; the per-event log written to w is durable as soon as
+// each line is emitted.
+func (c *CPU) EnableRITrace(w io.Writer) {
+	c.RITraceOut = w
+	if w != nil {
+		c.riCounters = make(map[string]*RICounter)
+	} else {
+		c.riCounters = nil
+	}
+}
+
+// reservedInstruction raises a Reserved Instruction exception and, when
+// RI tracing is enabled, records the faulting word for offline analysis.
+// Use this at every site where the emulator falls off the end of its
+// instruction decode tables.
+func (c *CPU) reservedInstruction(inst Instruction) {
+	if c.RITraceOut != nil {
+		key := fmt.Sprintf("op=0x%02x funct=0x%02x rs=%d rt=%d rd=%d shamt=%d",
+			inst.Opcode, inst.Funct, inst.Rs, inst.Rt, inst.Rd, inst.Shamt)
+		fmt.Fprintf(c.RITraceOut, "[%d] pc=0x%08x raw=0x%08x %s  %s\n",
+			c.Cycles, c.CurrentPC, inst.Raw, key, Disassemble(inst.Raw, c.CurrentPC))
+		if existing, ok := c.riCounters[key]; ok {
+			existing.Count++
+			existing.LastPC = c.CurrentPC
+			existing.Raw = inst.Raw
+		} else {
+			c.riCounters[key] = &RICounter{
+				Count:  1,
+				LastPC: c.CurrentPC,
+				Raw:    inst.Raw,
+				Key:    key,
+			}
+		}
+	}
+	c.Exception(EXC_RI, 0)
+}
+
+// RICounters returns the accumulated Reserved Instruction tally sorted by
+// descending count, or nil if RI tracing was never enabled.
+func (c *CPU) RICounters() []RICounter {
+	if c.riCounters == nil {
+		return nil
+	}
+	out := make([]RICounter, 0, len(c.riCounters))
+	for _, v := range c.riCounters {
+		out = append(out, *v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
+}
+
 // Exception handles CPU exception processing: updates Cause, EPC, Status EXL,
 // BadVAddr and jumps to the exception vector.
 func (c *CPU) Exception(code uint8, badVAddr uint32) {
@@ -452,6 +561,36 @@ func (c *CPU) exception(code uint8, badVAddr uint32, allowRefill bool) {
 
 	if code == EXC_MOD || code == EXC_ADEL || code == EXC_ADES || code == EXC_TLBL || code == EXC_TLBS {
 		c.updateTLBExceptionState(badVAddr)
+	}
+
+	// If TraceADE is set, halt on the first userspace address error
+	// (AdEL/AdES) so the caller can inspect the faulting instruction.
+	if c.TraceADE && (code == EXC_ADEL || code == EXC_ADES) && c.CurrentPC < 0x80000000 {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "userspace %s at PC=0x%08X  inst=0x%08X  %s\n",
+			ExceptionName(code), c.CurrentPC, c.Instruction,
+			Disassemble(c.Instruction, c.CurrentPC))
+		fmt.Fprintf(&sb, "BadVAddr=0x%08X  Status=0x%08X  Cause=0x%08X  UserLocal=0x%08X\n",
+			badVAddr, c.CP0[CP0_STATUS], c.CP0[CP0_CAUSE], c.UserLocal)
+		for i := 0; i < 32; i += 4 {
+			fmt.Fprintf(&sb, "  r%-2d=%08X  r%-2d=%08X  r%-2d=%08X  r%-2d=%08X\n",
+				i, c.Regs[i], i+1, c.Regs[i+1],
+				i+2, c.Regs[i+2], i+3, c.Regs[i+3])
+		}
+		fmt.Fprintf(&sb, "  hi=%08X  lo=%08X  sp=%08X\n\n",
+			c.HI, c.LO, c.Regs[29])
+		fmt.Fprintln(&sb, "--- last 40 instructions ---")
+		for _, e := range c.GetHistory() {
+			marker := " "
+			if e.InDelaySlot {
+				marker = "+"
+			}
+			fmt.Fprintf(&sb, "  %s 0x%08X  %08X  %s\n",
+				marker, e.PC, e.Instruction,
+				Disassemble(e.Instruction, e.PC))
+		}
+		c.HaltWith(HaltExceptionStorm, "%s", sb.String())
+		return
 	}
 
 	// EPC and the BD flag are only meaningful for the outermost
@@ -559,7 +698,7 @@ func (c *CPU) RecordHistoryEntry(pc uint32, raw uint32, inDelaySlot bool) {
 		MemAccess:   c.currentMemAccess,
 		InDelaySlot: inDelaySlot,
 	}
-	c.HistoryIndex = (c.HistoryIndex + 1) % 40
+	c.HistoryIndex = (c.HistoryIndex + 1) % HistorySize
 	if c.HistoryIndex == 0 {
 		c.HistoryFull = true
 	}
@@ -567,7 +706,7 @@ func (c *CPU) RecordHistoryEntry(pc uint32, raw uint32, inDelaySlot bool) {
 
 func (c *CPU) GetHistory() []HistoryEntry {
 	var entries []HistoryEntry
-	limit := 40
+	limit := HistorySize
 	start := 0
 	size := c.HistoryIndex
 	if c.HistoryFull {
