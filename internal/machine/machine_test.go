@@ -485,3 +485,29 @@ func TestMachineWithSDCardOptions(t *testing.T) {
 	})
 }
 
+func TestMachineMapsISPWindowsBeforePeripheralCatchAll(t *testing.T) {
+	m := New(1024, nil, 0)
+
+	m.Bus.Write32(ISPCoreStart, 0x12345678)
+	if got := m.ISPCore.Read32(0); got != 0x12345678 {
+		t.Fatalf("expected ISP core register write, got 0x%08X", got)
+	}
+	if got := m.Periph.Written(); len(got) != 0 {
+		t.Fatalf("expected ISP access not to hit PERIPH catch-all, got %d writes", len(got))
+	}
+}
+
+func TestMSCCompletionDoesNotAssertSharedISPIRQ(t *testing.T) {
+	m := New(1024, nil, 0)
+
+	m.MSC.Write32(device.MSC_IMASK, ^device.MSC_IREG_END_CMD_RES)
+	m.MSC.Write32(device.MSC_CMD, 0)
+	m.MSC.Write32(device.MSC_STRPCL, device.MSC_STRPCL_START_OP)
+
+	if got := m.MSC.Read32(device.MSC_IREG); got&device.MSC_IREG_END_CMD_RES == 0 {
+		t.Fatalf("expected MSC command completion bit")
+	}
+	if got := m.INTC.RawPending(); got != 0 {
+		t.Fatalf("expected MSC completion not to assert INTC, got raw pending 0x%08X", got)
+	}
+}

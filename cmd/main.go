@@ -30,6 +30,7 @@ func main() {
 	liveUART := flag.Bool("live-uart", true, "Echo UART output live while the emulator runs")
 	uartLimit := flag.Int("uart-limit", 16384, "Maximum captured UART bytes to print per port; use 0 for unlimited")
 	history := flag.Bool("history", false, "Save and print history of the last 40 executed instructions on halt")
+	haltPC := flag.Uint("halt-pc", 0, "Halt before executing the specified guest PC address; use 0 to disable")
 	gdbAddr := flag.String("gdb", "", "Enable GDB RSP server on port or address (e.g. :1234)")
 	gdbWait := flag.Bool("gdb-wait", false, "Pause CPU execution on start until GDB connects")
 	sdcardPath := flag.String("sdcard", "", "Path to optional SD card image file to mount")
@@ -74,6 +75,9 @@ func main() {
 
 	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize), machineOpts...)
 	m.CPU.RecordHistory = *history
+	if *haltPC != 0 {
+		m.CPU.Breakpoints = map[uint32]bool{uint32(*haltPC): true}
+	}
 	if !*liveUART {
 		for _, port := range m.UARTs {
 			port.SetOutput(io.Discard)
@@ -90,20 +94,24 @@ func main() {
 	}
 
 	blocks := map[string]*device.RegisterBlock{
-		"CPM":    m.CPM,
-		"INTC":   m.INTC.RegisterBlock,
-		"TCU":    m.TCU,
-		"OST":    m.OST.RegisterBlock,
-		"GPIO":   m.GPIO,
-		"I2C0":   m.I2C0.RegisterBlock,
-		"DDRC":   m.DDRC,
-		"DDRP":   m.DDRP,
-		"SFC":    m.SFC.RegisterBlock,
-		"GMAC":   m.GMAC,
-		"DWC2":   m.DWC2,
-		"EFUSE":  m.EFUSE,
-		"MSC":    m.MSC.RegisterBlock,
-		"PERIPH": m.Periph,
+		"CPM":      m.CPM,
+		"INTC":     m.INTC.RegisterBlock,
+		"TCU":      m.TCU,
+		"OST":      m.OST.RegisterBlock,
+		"GPIO":     m.GPIO,
+		"I2C0":     m.I2C0.RegisterBlock,
+		"DDRC":     m.DDRC,
+		"DDRP":     m.DDRP,
+		"SFC":      m.SFC.RegisterBlock,
+		"GMAC":     m.GMAC,
+		"DWC2":     m.DWC2,
+		"EFUSE":    m.EFUSE,
+		"MSC":      m.MSC.RegisterBlock,
+		"ISP_CORE": m.ISPCore,
+		"ISP_IVDC": m.ISPIVDC,
+		"ISP_VIC":  m.ISPVIC,
+		"ISP_CSI":  m.ISPCSI,
+		"PERIPH":   m.Periph,
 	}
 
 	if *traceMMIO {
