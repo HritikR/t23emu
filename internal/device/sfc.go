@@ -60,6 +60,7 @@ type SFC struct {
 
 	Interrupt    func(assert bool)
 	DMAWrite     func(addr uint32, data []byte)
+	DMARead      func(addr uint32, length int) []byte
 	TraceContext func() (pc uint32, cycles uint64)
 
 	command byte
@@ -293,6 +294,9 @@ func (s *SFC) startTransfer() {
 	}
 
 	s.active = s.remaining > 0
+	if s.active && !isReadCommand(s.command) && s.reply == nil {
+		s.tryDMAWrite()
+	}
 	s.tryDMARead()
 	s.dmaArmed = false
 	s.done = true
@@ -329,6 +333,30 @@ func (s *SFC) tryDMARead() {
 	s.active = false
 	s.debugf("dma-read addr=0x%08x len=%d data=% x", memAddr, len(data), data)
 	s.DMAWrite(memAddr, data)
+}
+
+func (s *SFC) tryDMAWrite() {
+	if s.DMARead == nil || !s.dmaArmed || s.remaining == 0 {
+		return
+	}
+
+	memAddr := s.regs[SFC_MEM_ADDR]
+	if memAddr == 0 {
+		return
+	}
+
+	data := s.DMARead(memAddr, int(s.remaining))
+	for i, b := range data {
+		flashAddr := s.addr + uint32(i)
+		if flashAddr < uint32(len(s.flash)) {
+			s.flash[flashAddr] = b
+		}
+	}
+	s.debugf("dma-write-flash addr=0x%08x len=%d flashAddr=0x%08x", memAddr, len(data), s.addr)
+	s.addr += s.remaining
+	s.index += s.remaining
+	s.remaining = 0
+	s.active = false
 }
 
 func (s *SFC) erase(start uint32, length uint32) {
