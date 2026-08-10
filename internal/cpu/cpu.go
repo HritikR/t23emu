@@ -12,6 +12,12 @@ import (
 
 const HistorySize = 512
 
+// spinForwardThreshold is the number of Steps without an interrupt
+// before the CPU fast-forwards through a spin loop (e.g. the kernel
+// reboot loop where interrupts are disabled). The OST tick fires every
+// ~12M cycles, so this threshold is well clear of normal operation.
+const spinForwardThreshold = 100000
+
 type CPU struct {
 	// General purpose registers
 	// MIPS has 32 registers: $zero-$ra
@@ -167,6 +173,15 @@ type CPU struct {
 	currentMemVal    uint32
 	currentMemAccess string
 
+	// stepsSinceInterrupt counts Steps taken without delivering an
+	// interrupt. During normal operation the OST fires every ~12M
+	// cycles, so this rarely exceeds a few thousand. During a reboot
+	// spin loop (interrupts disabled), it climbs indefinitely. When it
+	// passes spinForwardThreshold and the watchdog is armed, we
+	// fast-forward to the watchdog deadline so the reboot fires
+	// quickly.
+	stepsSinceInterrupt int
+
 	// Debugger breakpoints, watchpoints, and single stepping
 	Breakpoints   map[uint32]bool
 	Watchpoints   map[string]Watchpoint
@@ -320,6 +335,7 @@ func (c *CPU) Step() {
 	if c.Waiting {
 		if pending := c.updateInterruptPending(); pending != 0 {
 			c.Waiting = false
+			c.stepsSinceInterrupt = 0
 			if c.interruptEnabled(pending) {
 				c.takeInterrupt()
 			}
@@ -336,8 +352,21 @@ func (c *CPU) Step() {
 	}
 
 	if !c.branchTaken && c.checkInterrupts() {
+		c.stepsSinceInterrupt = 0
 		c.Cycles++
 		return
+	}
+
+	// Spin-loop fast-forward: if no interrupt has fired in a long time
+	// and the watchdog is armed, the CPU is likely in the kernel reboot
+	// spin loop (interrupts disabled). Jump directly to the watchdog
+	// deadline instead of emulating billions of printk cycles.
+	c.stepsSinceInterrupt++
+	if c.stepsSinceInterrupt >= spinForwardThreshold && c.NextWakeCycle != nil {
+		if next := c.NextWakeCycle(); next > c.Cycles {
+			c.Cycles = next
+		}
+		c.stepsSinceInterrupt = 0
 	}
 
 	// The instruction about to run is a delay slot if the previous one
