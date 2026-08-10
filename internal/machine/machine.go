@@ -383,6 +383,17 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		}
 		traceSFCIRQf("dma-write addr=0x%08x len=%d data=% x", addr, len(data), data)
 	}
+	sfc.DMARead = func(addr uint32, length int) []byte {
+		data := make([]byte, length)
+		for i := 0; i < length; i++ {
+			source := addr + uint32(i)
+			if source >= ram.Size() {
+				break
+			}
+			data[i] = ram.Read8(source)
+		}
+		return data
+	}
 	sfc.Interrupt = func(assert bool) {
 		if assert {
 			intc.Assert(SFCIRQ)
