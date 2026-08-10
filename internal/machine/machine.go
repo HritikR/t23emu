@@ -524,14 +524,22 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		return intc.RawPending() != 0
 	}
 	c.NextWakeCycle = func() uint64 {
-		return ost.NextExpiryCycle()
+		ostNext := ost.NextExpiryCycle()
+		wdtNext := tcu.WatchdogExpiryCycle()
+		if wdtNext != 0 && (ostNext == 0 || wdtNext < ostNext) {
+			return wdtNext
+		}
+		return ostNext
 	}
 
-	// Watchdog reset: when the guest programs the watchdog for an
-	// immediate reset (reboot), halt the CPU.
+	// Watchdog: check expiry on every Step(). When the countdown
+	// reaches zero, halt for reboot.
 	tcu.OnWatchdogReset = func() {
 		c.HaltWith(cpu.HaltWatchdogReset,
 			"watchdog reset (system reboot)")
+	}
+	c.WatchdogCheck = func() bool {
+		return tcu.WatchdogExpired()
 	}
 
 	if len(romData) > 0 {
@@ -608,6 +616,9 @@ func (m *Machine) reboot() {
 
 	// Reset OS timer so the kernel programs it from scratch.
 	m.OST.Reset()
+
+	// Clear watchdog state.
+	m.TCU.Reset()
 
 	// Clear SFC transfer state (flash contents persist).
 	m.SFC.Reset()
