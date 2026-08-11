@@ -178,9 +178,8 @@ func (m *MSC) Read32(addr uint32) uint32 {
 		value = m.regs[MSC_IREG]
 
 	case MSC_RES:
-		for i := 0; i < 4; i++ {
-			value |= uint32(m.readResponseByte()) << (uint(i) * 8)
-		}
+		value = uint32(m.readResponseByte())
+		value |= uint32(m.readResponseByte()) << 8
 
 	case MSC_RXFIFO:
 		if m.fifoIndex < len(m.fifoBuffer) {

@@ -2,7 +2,7 @@
 
 I built this emulator to run real firmware dumps from Ingenic T23 chips. It is not QEMU. My goal was simple: load a raw firmware image, see where execution hangs, and write just enough hardware emulation to move past that spot.
 
-Right now, my emulator boots all the way through the Linux kernel and launches userspace apps. The Tuya IoT camera software starts up and gets past TX ISP camera driver probing, including ISP DMA channel setup.
+Right now, my emulator boots all the way through the Linux kernel and launches userspace apps. The Tuya IoT camera software starts up and gets past TX ISP camera driver probing, ISP DMA channel setup, and MMC card initialization.
 
 ## what works
 
@@ -26,7 +26,7 @@ Here is what boots successfully:
 * I2C bus detection and SC2336 camera sensor probing
 * Driver initialization for TX ISP, audio codec, and VPU
 * TX ISP core probing and DMA channel setup
-* MSC MMC storage driver and SDHC card detection through the polling path
+* MSC MMC storage driver, SDHC card detection, command interrupts, and short-response reads
 * Running linuxrc, building dev files with mdev, and setting up zram swap
 * Tuya IoT userspace startup beyond the original TX ISP module-load panic
 
@@ -47,7 +47,7 @@ Here is what I have modeled so far:
 * SFC flash controller with SPI NOR flash emulation
 * TX ISP core, IVDC, VIC, and CSI register windows
 * DWC2 USB OTG controller
-* MSC MMC controller with SDHC polling support
+* MSC MMC controller with SDHC command, response, read-block, and interrupt support
 * EFUSE hardware block
 * GMAC network stub and MDIO bus
 * GDB RSP server for remote debugging and stepping
@@ -144,9 +144,10 @@ When execution stops, my emulator prints a register access summary. Hot register
 * [x] Model DWC2 USB controller to prevent boot timeouts
 * [x] Boot to linuxrc init process
 * [x] Support MSC MMC controller and SDHC card detection
+* [x] Route MSC completion interrupts to the kernel-derived INTC line
+* [x] Handle MSC short responses when the guest reads MSC_RES as words
 * [x] Run Tuya IoT userspace beyond TX ISP module initialization
 * [x] Fix TX ISP kernel panic in camera driver module
-* [ ] Model MSC interrupt routing accurately
 * [ ] Replace register stubs with real hardware logic
 * [ ] Speed up boot time without breaking kernel timers
 * [ ] Clean up CPU tests and add boot regression tests

@@ -497,17 +497,24 @@ func TestMachineMapsISPWindowsBeforePeripheralCatchAll(t *testing.T) {
 	}
 }
 
-func TestMSCCompletionDoesNotAssertSharedISPIRQ(t *testing.T) {
+func TestMSCCompletionAssertsMSCIRQWithoutUsingISPCoreIRQ(t *testing.T) {
 	m := New(1024, nil, 0)
 
 	m.MSC.Write32(device.MSC_IMASK, ^device.MSC_IREG_END_CMD_RES)
+	m.INTC.Write32(device.INTC_IMCR+0x20, 1<<(MSC0IRQ-32))
 	m.MSC.Write32(device.MSC_CMD, 0)
 	m.MSC.Write32(device.MSC_STRPCL, device.MSC_STRPCL_START_OP)
 
 	if got := m.MSC.Read32(device.MSC_IREG); got&device.MSC_IREG_END_CMD_RES == 0 {
 		t.Fatalf("expected MSC command completion bit")
 	}
-	if got := m.INTC.RawPending(); got != 0 {
-		t.Fatalf("expected MSC completion not to assert INTC, got raw pending 0x%08X", got)
+	if got := m.INTC.Read32(device.INTC_IPR + 0x20); got != 1<<(MSC0IRQ-32) {
+		t.Fatalf("expected MSC completion on INTC bank 1 bit %d, got 0x%08X", MSC0IRQ-32, got)
+	}
+	if got := m.INTC.Read32(device.INTC_IPR); got&(1<<29) != 0 {
+		t.Fatalf("expected MSC completion not to assert ISP core IRQ line, got bank 0 IPR 0x%08X", got)
+	}
+	if got := m.INTC.Read32(device.INTC_IPR + 0x20); got&(1<<(38-32)) != 0 {
+		t.Fatalf("expected MSC completion not to assert ISP IVDC IRQ line, got bank 1 IPR 0x%08X", got)
 	}
 }
