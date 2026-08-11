@@ -157,4 +157,4 @@ When execution stops, my emulator prints a register access summary. Hot register
 
 ## license
 
-MIT. See LICENSE file for details.
+GNU General Public License v2.0 only. See the LICENSE file for details.
