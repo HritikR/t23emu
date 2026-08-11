@@ -58,6 +58,8 @@ The SFC flash controller is the most complete piece because UBoot and Linux read
 
 ## build and run
 
+Prebuilt binaries, when available, are published on the [GitHub releases page](https://github.com/HritikR/t23emu/releases).
+
 You can build the project with make:
 
 ```sh
