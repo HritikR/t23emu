@@ -88,6 +88,7 @@ You can pass extra parameters to make if needed:
 
 ```sh
 make run ROM=firmware_dump.bin RAM=67108864
+make run ROM=firmware_dump.bin HISTORY=1
 ```
 
 To enable SFC trace logs while running:
