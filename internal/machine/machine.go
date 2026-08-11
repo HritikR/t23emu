@@ -44,6 +44,11 @@ const (
 	// bank-0 dispatcher adds 8 to the pending bit index before do_IRQ().
 	SFCIRQ uint8 = 7
 
+	// MSC0IRQ is the INTC hardware bit for the jzmmc_v1.2 controller. The
+	// decompressed kernel's platform resource lists Linux IRQ 45, and the
+	// Ingenic bank dispatcher adds 8 to the hardware bit before do_IRQ().
+	MSC0IRQ uint8 = 37
+
 	// UART IRQs. UART1 (ttyS1) maps to Linux IRQ 58.
 	// Linux IRQ = INTC HW Bit + 8 => UART1IRQ = 58 - 8 = 50.
 	UART0IRQ uint8 = 49 // Linux IRQ 57
@@ -374,10 +379,13 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		}
 	}
 
-	// Do not wire the MSC stub to INTC until the board's real MSC line is
-	// identified. The original tx-isp-t23.ko uses Linux IRQ 37 for ISP core;
-	// routing MSC completion to that line invokes the ISP ISR during module
-	// load before its core register base is ready.
+	msc0.Interrupt = func(assert bool) {
+		if assert {
+			intc.Assert(MSC0IRQ)
+		} else {
+			intc.Deassert(MSC0IRQ)
+		}
+	}
 
 	uartIRQs := []uint8{UART0IRQ, UART1IRQ, UART2IRQ}
 	for i, u := range uarts {
