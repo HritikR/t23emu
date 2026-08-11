@@ -526,6 +526,13 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 	c.NextWakeCycle = func() uint64 {
 		ostNext := ost.NextExpiryCycle()
 		wdtNext := tcu.WatchdogExpiryCycle()
+		// Treat a stale OST expiry (already passed) as unarmed so
+		// the watchdog deadline is used instead. This happens during
+		// the reboot spin loop when the kernel has stopped acking OST
+		// interrupts and nextCompare is stuck in the past.
+		if ostNext != 0 && ostNext <= c.Cycles {
+			ostNext = 0
+		}
 		if wdtNext != 0 && (ostNext == 0 || wdtNext < ostNext) {
 			return wdtNext
 		}

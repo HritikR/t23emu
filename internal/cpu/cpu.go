@@ -335,8 +335,8 @@ func (c *CPU) Step() {
 	if c.Waiting {
 		if pending := c.updateInterruptPending(); pending != 0 {
 			c.Waiting = false
-			c.stepsSinceInterrupt = 0
 			if c.interruptEnabled(pending) {
+				c.stepsSinceInterrupt = 0
 				c.takeInterrupt()
 			}
 			c.Cycles++
@@ -357,15 +357,24 @@ func (c *CPU) Step() {
 		return
 	}
 
-	// Spin-loop fast-forward: if no interrupt has fired in a long time
-	// and the watchdog is armed, the CPU is likely in the kernel reboot
-	// spin loop (interrupts disabled). Jump directly to the watchdog
-	// deadline instead of emulating billions of printk cycles.
-	c.stepsSinceInterrupt++
-	if c.stepsSinceInterrupt >= spinForwardThreshold && c.NextWakeCycle != nil {
-		if next := c.NextWakeCycle(); next > c.Cycles {
-			c.Cycles = next
+	// Spin-loop fast-forward: if interrupts have been disabled (IE=0)
+	// for a long time, the CPU is likely in the kernel reboot spin
+	// loop. Jump directly to the next wake cycle (watchdog deadline)
+	// instead of emulating billions of printk cycles.
+	//
+	// Only counting Steps while IE=0 ensures the counter starts fresh
+	// the moment interrupts are disabled, so brief critical sections
+	// during normal operation never reach the threshold.
+	if c.CP0[CP0_STATUS]&STATUS_IE == 0 {
+		c.stepsSinceInterrupt++
+		if c.stepsSinceInterrupt >= spinForwardThreshold &&
+			c.NextWakeCycle != nil {
+			if next := c.NextWakeCycle(); next > c.Cycles {
+				c.Cycles = next
+			}
+			c.stepsSinceInterrupt = 0
 		}
+	} else {
 		c.stepsSinceInterrupt = 0
 	}
 
