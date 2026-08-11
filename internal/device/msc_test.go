@@ -14,6 +14,13 @@ func readShortResponse(msc *MSC) uint32 {
 	return (res0 << 24) | (res1 << 8) | (res2 & 0xff)
 }
 
+func readShortResponseWords(msc *MSC) uint32 {
+	res0 := msc.Read32(MSC_RES)
+	res1 := msc.Read32(MSC_RES)
+	res2 := msc.Read32(MSC_RES)
+	return (res0 << 24) | (res1 << 8) | (res2 & 0xff)
+}
+
 func TestMSCNoCardCommandTimesOut(t *testing.T) {
 	msc := NewMSC("MSC0", false, nil)
 
@@ -86,6 +93,23 @@ func TestMSCCMD0AndCMD1(t *testing.T) {
 	msc.Write32(MSC_STRPCL, MSC_STRPCL_START_OP)
 	if got := readShortResponse(msc); got != 0x80FF8000 {
 		t.Fatalf("CMD1: expected 0x80FF8000, got 0x%08X", got)
+	}
+}
+
+func TestMSCShortResponseWordReads(t *testing.T) {
+	msc := NewMSC("MSC0", true, nil)
+
+	msc.Write32(MSC_CMD, 1)
+	msc.Write32(MSC_STRPCL, MSC_STRPCL_START_OP)
+	if got := readShortResponseWords(msc); got != 0x80FF8000 {
+		t.Fatalf("CMD1 word reads: expected 0x80FF8000, got 0x%08X", got)
+	}
+
+	msc.Write32(MSC_CMD, 8)
+	msc.Write32(MSC_ARG, 0x000001AA)
+	msc.Write32(MSC_STRPCL, MSC_STRPCL_START_OP)
+	if got := readShortResponseWords(msc); got != 0x1AA {
+		t.Fatalf("CMD8 word reads: expected 0x000001AA, got 0x%08X", got)
 	}
 }
 
