@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/HritikR/t23emu/internal/bus"
 	"github.com/HritikR/t23emu/internal/cpu"
@@ -220,6 +221,13 @@ type Machine struct {
 
 	// BootROMReturn is the address that signals a return to the boot ROM.
 	BootROMReturn uint32
+
+	// rtSyncEnabled controls the wall-clock governor in Run(). When
+	// true, the emulator sleeps whenever emulated time runs ahead of
+	// real time, keeping interactive timeouts (e.g. login prompts)
+	// accurate. During boot the emulator is slower than real time, so
+	// no sleep occurs.
+	rtSyncEnabled bool
 }
 
 // Option configures a Machine instance.
@@ -228,6 +236,7 @@ type Option func(*MachineOptions)
 type MachineOptions struct {
 	DisableSDCard bool
 	SDCardImage   []byte
+	DisableRTSync bool
 }
 
 // WithSDCardImage sets a custom SD card disk image.
@@ -241,6 +250,17 @@ func WithSDCardImage(image []byte) Option {
 func WithDisableSDCard() Option {
 	return func(o *MachineOptions) {
 		o.DisableSDCard = true
+	}
+}
+
+// WithDisableRTSync disables the wall-clock governor in Run(). By
+// default the emulator sleeps whenever emulated time runs ahead of real
+// time, keeping interactive timeouts (e.g. login prompts) accurate.
+// Disabling it gives maximum speed at the cost of those timeouts firing
+// too quickly.
+func WithDisableRTSync() Option {
+	return func(o *MachineOptions) {
+		o.DisableRTSync = true
 	}
 }
 
@@ -542,6 +562,7 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		Periph:        periph,
 		Bus:           b,
 		BootROMReturn: BootROMReturn,
+		rtSyncEnabled: !options.DisableRTSync,
 	}
 }
 
@@ -587,6 +608,25 @@ func (m *Machine) Run(maxCycles uint64) uint64 {
 
 	start := m.CPU.Cycles
 
+	// Wall-clock governor: when emulated time runs ahead of real
+	// time (e.g. during idle when the emulator can outpace real
+	// hardware), sleep so the guest sees correct timing for
+	// interactive features like login timeouts. During boot the
+	// emulator is slower than real time, so no sleep occurs.
+	//
+	// The check fires every syncInterval emulated cycles, which is
+	// coarse enough to avoid time.Now() overhead in the hot path
+	// but fine enough for smooth throttling (~once per OST tick).
+	const syncInterval uint64 = 10_000_000 // ~8.4ms at 1.188GHz
+	const cyclesPerSec = 1_188_000_000
+
+	var govStart time.Time
+	var nextSync uint64
+	if m.rtSyncEnabled {
+		govStart = time.Now()
+		nextSync = start + syncInterval
+	}
+
 	for m.CPU.Running {
 
 		if maxCycles > 0 && m.CPU.Cycles-start >= maxCycles {
@@ -603,6 +643,19 @@ func (m *Machine) Run(maxCycles uint64) uint64 {
 		}
 
 		m.CPU.Step()
+
+		// Governor: if emulated time is ahead of wall-clock time,
+		// sleep for the difference. This naturally handles idle
+		// loops, WAIT fast-forwards, and spin-forward jumps without
+		// needing firmware-specific address detection.
+		if m.rtSyncEnabled && m.CPU.Cycles >= nextSync {
+			nextSync = m.CPU.Cycles + syncInterval
+			emulated := time.Duration(float64(m.CPU.Cycles-start) /
+				float64(cyclesPerSec) * float64(time.Second))
+			if ahead := emulated - time.Since(govStart); ahead > 0 {
+				time.Sleep(ahead)
+			}
+		}
 	}
 
 	m.CPU.Stop()

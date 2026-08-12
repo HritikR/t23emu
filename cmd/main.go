@@ -40,6 +40,8 @@ func main() {
 
 	cpuProfile := flag.String("cpuprofile", "", "Write cpu profile to file")
 
+	noRTSync := flag.Bool("no-rt-sync", false, "Disable wall-clock governor (login timeouts will fire too quickly)")
+
 	flag.Parse()
 
 	if *cpuProfile != "" {
@@ -89,6 +91,10 @@ func main() {
 		machineOpts = append(machineOpts, machine.WithSDCardImage(sdData))
 	} else {
 		fmt.Println("SD Card: using default empty FAT32 image")
+	}
+	if *noRTSync {
+		machineOpts = append(machineOpts, machine.WithDisableRTSync())
+		fmt.Println("Real-time sync: disabled (wall-clock governor off)")
 	}
 
 	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize), machineOpts...)
