@@ -496,6 +496,9 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		assertTimer()
 		return intc.RawPending() != 0
 	}
+	c.NextWakeCycle = func() uint64 {
+		return ost.NextExpiryCycle()
+	}
 
 	if len(romData) > 0 {
 		c.ResetPC = resetPC
