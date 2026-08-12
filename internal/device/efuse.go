@@ -3,7 +3,8 @@ package device
 // Ingenic EFUSE register offsets, relative to the EFUSE physical base at
 // 0x13540000.
 const (
-	EFUSE_SOC_INFO uint32 = 0x238
+	EFUSE_SOC_INFO  uint32 = 0x238 // subsoctype1
+	EFUSE_SOC_TYPE2 uint32 = 0x250 // subsoctype2
 )
 
 const (
@@ -19,6 +20,9 @@ func NewEFUSE() *RegisterBlock {
 
 	efuse.SetName(EFUSE_SOC_INFO, "SOC_INFO")
 	efuse.SetInitial(EFUSE_SOC_INFO, EFUSE_SOC_T23N)
+
+	efuse.SetName(EFUSE_SOC_TYPE2, "SOC_TYPE2")
+	efuse.SetInitial(EFUSE_SOC_TYPE2, 0x00000000)
 
 	return efuse
 }

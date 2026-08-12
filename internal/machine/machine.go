@@ -75,6 +75,10 @@ const (
 	I2C0Start uint32 = 0x10050000
 	I2C0End   uint32 = 0x10050FFF
 
+	// SYSCTLStart is the System Control block (0x13000000) where offset 0x2C holds SOC_ID.
+	SYSCTLStart uint32 = 0x13000000
+	SYSCTLEnd   uint32 = 0x13000FFF
+
 	// DDRCStart covers the DDR controller and PHY, which the SPL programs
 	// before it can relocate anything into external memory.
 	DDRCStart uint32 = 0x13010000
@@ -194,6 +198,8 @@ type Machine struct {
 	GMAC *device.RegisterBlock
 
 	DWC2 *device.RegisterBlock
+
+	SYSCTL *device.RegisterBlock
 
 	// EFUSE is the one-time-programmable fuse controller.
 	EFUSE *device.RegisterBlock
@@ -316,6 +322,10 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 	i2c0.AttachDevice(0x30, sc2336)
 	i2c0.AttachDevice(0x36, sc2336)
 	b.Map(I2C0Start, I2C0End, i2c0)
+
+	sysctl := device.NewRegisterBlock("SYSCTL", 0x1000)
+	sysctl.SetInitial(0x2C, 0x00023000)
+	b.Map(SYSCTLStart, SYSCTLEnd, sysctl)
 
 	ddrc := device.NewDDRC()
 	b.Map(DDRCStart, DDRCEnd, ddrc)
@@ -519,6 +529,7 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		SFC:           sfc,
 		GMAC:          gmac,
 		DWC2:          dwc2,
+		SYSCTL:        sysctl,
 		EFUSE:         efuse,
 		MSC:           msc0,
 		ISPCore:       ispCore,
