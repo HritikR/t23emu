@@ -129,6 +129,14 @@ type CPU struct {
 	Watchpoints   map[string]Watchpoint
 	HitWatchpoint uint32
 	SingleStep    bool
+
+	icache [65536]icacheEntry
+}
+
+type icacheEntry struct {
+	valid bool
+	raw   uint32
+	inst  Instruction
 }
 
 type WatchpointType int
@@ -218,6 +226,10 @@ func (c *CPU) Reset() {
 	c.exceptionRun = 0
 
 	c.Cycles = 0
+
+	for i := range c.icache {
+		c.icache[i].valid = false
+	}
 }
 
 // Fetch reads the next instruction from memory and advances the program
@@ -305,7 +317,17 @@ func (c *CPU) Step() {
 
 	raw := c.Fetch()
 
-	inst := Decode(raw)
+	icIndex := (pc >> 2) & 0xFFFF
+	entry := &c.icache[icIndex]
+	var inst Instruction
+	if entry.valid && entry.raw == raw {
+		inst = entry.inst
+	} else {
+		inst = Decode(raw)
+		entry.valid = true
+		entry.raw = raw
+		entry.inst = inst
+	}
 
 	if c.Trace {
 		marker := " "
@@ -328,8 +350,15 @@ func (c *CPU) Step() {
 }
 
 func (c *CPU) checkInterrupts() bool {
+	status := c.CP0[CP0_STATUS]
+	if status&STATUS_IE == 0 || status&(STATUS_EXL|STATUS_ERL) != 0 {
+		return false
+	}
+	if (c.Cycles & 31) != 0 {
+		return false
+	}
 	pending := c.updateInterruptPending()
-	if !c.interruptEnabled(pending) {
+	if pending&status&STATUS_IM == 0 {
 		return false
 	}
 

@@ -21,6 +21,10 @@ func (r *RAM) Size() uint32 {
 	return r.size
 }
 
+func (r *RAM) Bytes() []byte {
+	return r.data
+}
+
 func (r *RAM) Read8(addr uint32) byte {
 	r.checkAddress(addr)
 

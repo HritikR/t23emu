@@ -1,14 +1,25 @@
 package bus
 
-import "github.com/HritikR/t23emu/internal/device"
+import (
+	"encoding/binary"
+
+	"github.com/HritikR/t23emu/internal/device"
+)
+
+type RAMProvider interface {
+	Bytes() []byte
+}
 
 type Bus struct {
 	mappings  []Mapping
 	translate func(uint32) (uint32, bool)
+	ram       []byte
+	ramStart  uint32
+	ramEnd    uint32
+	hasRAM    bool
 }
 
 func New() *Bus {
-
 	return &Bus{
 		mappings: make([]Mapping, 0),
 	}
@@ -19,7 +30,6 @@ func (b *Bus) Map(
 	end uint32,
 	dev device.Device,
 ) {
-
 	b.mappings = append(
 		b.mappings,
 		Mapping{
@@ -28,6 +38,16 @@ func (b *Bus) Map(
 			Device: dev,
 		},
 	)
+
+	// Fast path: if mapping a device that exposes raw RAM slice at physical address 0x0
+	if start == 0 {
+		if provider, ok := dev.(RAMProvider); ok {
+			b.ram = provider.Bytes()
+			b.ramStart = start
+			b.ramEnd = end
+			b.hasRAM = true
+		}
+	}
 }
 
 func (b *Bus) SetTranslator(translate func(uint32) (uint32, bool)) {
@@ -50,11 +70,7 @@ func (b *Bus) translateAddr(addr uint32) (uint32, bool) {
 	return fixedTranslate(addr)
 }
 
-func (b *Bus) find(addr uint32) *Mapping {
-	phys, ok := b.translateAddr(addr)
-	if !ok {
-		return nil
-	}
+func (b *Bus) findSlow(phys uint32) *Mapping {
 	for i := range b.mappings {
 		m := &b.mappings[i]
 		if phys >= m.Start && phys <= m.End {
@@ -64,17 +80,35 @@ func (b *Bus) find(addr uint32) *Mapping {
 	return nil
 }
 
+func (b *Bus) find(addr uint32) *Mapping {
+	phys, ok := b.translateAddr(addr)
+	if !ok {
+		return nil
+	}
+	return b.findSlow(phys)
+}
+
 // HasMapping returns true if the address has a mapped device.
 func (b *Bus) HasMapping(addr uint32) bool {
-	return b.find(addr) != nil
+	phys, ok := b.translateAddr(addr)
+	if !ok {
+		return false
+	}
+	if b.hasRAM && phys >= b.ramStart && phys <= b.ramEnd {
+		return true
+	}
+	return b.findSlow(phys) != nil
 }
 
 func (b *Bus) Read8(addr uint32) byte {
-	m := b.find(addr)
+	phys, ok := b.translateAddr(addr)
+	if ok && b.hasRAM && phys >= b.ramStart && phys <= b.ramEnd {
+		return b.ram[phys-b.ramStart]
+	}
+	m := b.findSlow(phys)
 	if m == nil {
 		panic("bus: unmapped read8")
 	}
-	phys, _ := b.translateAddr(addr)
 	return m.Device.Read8(phys - m.Start)
 }
 
@@ -82,11 +116,15 @@ func (b *Bus) Write8(
 	addr uint32,
 	value byte,
 ) {
-	m := b.find(addr)
+	phys, ok := b.translateAddr(addr)
+	if ok && b.hasRAM && phys >= b.ramStart && phys <= b.ramEnd {
+		b.ram[phys-b.ramStart] = value
+		return
+	}
+	m := b.findSlow(phys)
 	if m == nil {
 		panic("bus: unmapped write8")
 	}
-	phys, _ := b.translateAddr(addr)
 	m.Device.Write8(
 		phys-m.Start,
 		value,
@@ -94,11 +132,15 @@ func (b *Bus) Write8(
 }
 
 func (b *Bus) Read32(addr uint32) uint32 {
-	m := b.find(addr)
+	phys, ok := b.translateAddr(addr)
+	if ok && b.hasRAM && phys >= b.ramStart && phys+3 <= b.ramEnd {
+		offset := phys - b.ramStart
+		return binary.LittleEndian.Uint32(b.ram[offset : offset+4])
+	}
+	m := b.findSlow(phys)
 	if m == nil {
 		panic("bus: unmapped read32")
 	}
-	phys, _ := b.translateAddr(addr)
 	return m.Device.Read32(phys - m.Start)
 }
 
@@ -106,31 +148,51 @@ func (b *Bus) Write32(
 	addr uint32,
 	value uint32,
 ) {
-	m := b.find(addr)
+	phys, ok := b.translateAddr(addr)
+	if ok && b.hasRAM && phys >= b.ramStart && phys+3 <= b.ramEnd {
+		offset := phys - b.ramStart
+		binary.LittleEndian.PutUint32(
+			b.ram[offset:offset+4],
+			value,
+		)
+		return
+	}
+	m := b.findSlow(phys)
 	if m == nil {
 		panic("bus: unmapped write32")
 	}
-	phys, _ := b.translateAddr(addr)
 	m.Device.Write32(
 		phys-m.Start,
 		value,
 	)
 }
 
-// Read16 reads a halfword. The device interface only exposes byte and
-// word access, so halfwords are assembled from two little-endian byte
-// accesses. This keeps every device halfword-addressable for free.
+// Read16 reads a halfword.
 func (b *Bus) Read16(addr uint32) uint16 {
+	phys, ok := b.translateAddr(addr)
+	if ok && b.hasRAM && phys >= b.ramStart && phys+1 <= b.ramEnd {
+		offset := phys - b.ramStart
+		return binary.LittleEndian.Uint16(b.ram[offset : offset+2])
+	}
 	lo := uint16(b.Read8(addr))
 	hi := uint16(b.Read8(addr + 1))
 	return lo | hi<<8
 }
 
-// Write16 writes a halfword as two little-endian byte accesses.
+// Write16 writes a halfword.
 func (b *Bus) Write16(
 	addr uint32,
 	value uint16,
 ) {
+	phys, ok := b.translateAddr(addr)
+	if ok && b.hasRAM && phys >= b.ramStart && phys+1 <= b.ramEnd {
+		offset := phys - b.ramStart
+		binary.LittleEndian.PutUint16(
+			b.ram[offset:offset+2],
+			value,
+		)
+		return
+	}
 	b.Write8(addr, byte(value))
 	b.Write8(addr+1, byte(value>>8))
 }
