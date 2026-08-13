@@ -3,3 +3,4 @@ bin
 .gocache
 *.bin
 *.log
+*.pprof

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"runtime/pprof"
 	"syscall"
 	"time"
 
@@ -36,7 +37,23 @@ func main() {
 	sdcardPath := flag.String("sdcard", "", "Path to optional SD card image file to mount")
 	noSDCard := flag.Bool("no-sdcard", false, "Disable SD card presence in MSC controller")
 
+	cpuProfile := flag.String("cpuprofile", "", "Write cpu profile to file")
+
 	flag.Parse()
+
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	if *romPath == "" {
 		fmt.Fprintf(os.Stderr, "Error: -rom argument is required\n\n")
