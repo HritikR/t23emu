@@ -162,6 +162,15 @@ func (i *INTC) RawPending() uint32 {
 	return pending
 }
 
+// Reset clears all pending interrupts and restores all masks to the
+// reset state (all masked).
+func (i *INTC) Reset() {
+	for bank := range i.pending {
+		i.pending[bank] = 0
+		i.mask[bank] = ^uint32(0)
+	}
+}
+
 func intcBank(offset uint32) (int, uint32) {
 	bank := int(offset / intcBankStride)
 	if bank >= intcBanks {

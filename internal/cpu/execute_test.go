@@ -1045,6 +1045,105 @@ func TestWAITWakesWithoutDeliverableInterrupt(t *testing.T) {
 	}
 }
 
+func TestPollLoopFastForward(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	// A poll loop: load a zero flag and branch back while it is zero.
+	ram.Write32(0, 0x8FA80000) // lw $t0, 0($sp)
+	ram.Write32(4, 0x1000FFFE) // beq $t0, $zero, 0
+	ram.Write32(8, 0x00000000) // nop (delay slot)
+	cpu.Regs[29] = 0x100      // $sp into RAM
+	cpu.CP0[CP0_STATUS] = STATUS_IE | STATUS_ERL
+	cpu.Running = true
+	cpu.NextWakeCycle = func() uint64 { return 1_000_000 }
+
+	for i := 0; i < 200; i++ {
+		cpu.Step()
+	}
+
+	if cpu.Cycles < 1_000_000 {
+		t.Fatalf("expected poll loop to fast-forward to wake cycle, got %d", cpu.Cycles)
+	}
+	if cpu.PC > 12 {
+		t.Fatalf("expected execution to stay inside the loop, PC=0x%08X", cpu.PC)
+	}
+}
+
+func TestCountingLoopNotSkipped(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	// A progress loop: decrement a counter and branch back while
+	// nonzero. Registers change every iteration, so it must never be
+	// fast-forwarded.
+	ram.Write32(0, 0x2508FFFF) // addiu $t0, $t0, -1
+	ram.Write32(4, 0x1500FFFE) // bne $t0, $zero, 0
+	ram.Write32(8, 0x00000000) // nop (delay slot)
+	cpu.Regs[8] = 5
+	cpu.CP0[CP0_STATUS] = STATUS_IE | STATUS_ERL
+	cpu.Running = true
+	cpu.NextWakeCycle = func() uint64 { return 1_000_000 }
+
+	for i := 0; i < 200; i++ {
+		cpu.Step()
+	}
+
+	if cpu.Cycles >= 1_000_000 {
+		t.Fatalf("counting loop must not be fast-forwarded, cycles=%d", cpu.Cycles)
+	}
+	if cpu.ReadRegister(8) != 0 {
+		t.Fatalf("expected counter to reach zero, got r8=0x%08X", cpu.ReadRegister(8))
+	}
+}
+
+func TestPollLoopWithInnerBranch(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	// A poll loop whose body contains a nested counting loop: the
+	// inner branch's registers change every iteration, but the outer
+	// branch always executes with identical state, so the outer loop
+	// must still be detected and skipped.
+	ram.Write32(0, 0x8FA80000)  // lw   $t0, 0($sp)
+	ram.Write32(4, 0x24090003)  // addiu $t1, $zero, 3
+	ram.Write32(8, 0x2529FFFF)  // addiu $t1, $t1, -1
+	ram.Write32(12, 0x1520FFFE) // bne  $t1, $zero, 8
+	ram.Write32(16, 0x00000000) // nop
+	ram.Write32(20, 0x1000FFFA) // beq  $t0, $zero, 0
+	ram.Write32(24, 0x00000000) // nop
+	cpu.Regs[29] = 0x100
+	cpu.CP0[CP0_STATUS] = STATUS_IE | STATUS_ERL
+	cpu.Running = true
+	cpu.NextWakeCycle = func() uint64 { return 1_000_000 }
+
+	for i := 0; i < 600; i++ {
+		cpu.Step()
+	}
+
+	if cpu.Cycles < 1_000_000 {
+		t.Fatalf("expected outer poll loop to fast-forward despite inner branch, got %d cycles", cpu.Cycles)
+	}
+}
+
+func TestPollLoopInterruptsDisabledSleeps(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	ram.Write32(0, 0x8FA80000) // lw $t0, 0($sp)
+	ram.Write32(4, 0x1000FFFE) // beq $t0, $zero, 0
+	ram.Write32(8, 0x00000000) // nop
+	cpu.Regs[29] = 0x100
+	cpu.CP0[CP0_STATUS] = STATUS_ERL // IE=0
+	cpu.Running = true
+	cpu.NextWakeCycle = func() uint64 { return 100_000_000 }
+
+	for i := 0; i < 400; i++ {
+		cpu.Step()
+	}
+
+	// The IE=0 path advances Cycles by pollSleepCycles per skip
+	// instead of jumping to the (undeliverable) wake event.
+	if cpu.Cycles < pollSleepCycles {
+		t.Fatalf("expected IE=0 poll loop to advance cycles past sleep, got %d", cpu.Cycles)
+	}
+	if cpu.Cycles >= 100_000_000 {
+		t.Fatalf("IE=0 poll loop must not jump to wake cycle, got %d", cpu.Cycles)
+	}
+}
+
 func TestExecuteERET(t *testing.T) {
 	cpu := createTestCPU()
 	cpu.CP0[14] = 0x80001000 // EPC

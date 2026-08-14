@@ -64,14 +64,18 @@ func (c *CPU) lookupTLB(addr uint32, write bool) (uint32, bool, int) {
 
 		entryLo := entry.entryLo(addr)
 		if entryLo&entryLoV == 0 {
+			c.TLBMisses++
 			return 0, false, i
 		}
 		if write && entryLo&entryLoD == 0 {
+			c.TLBMisses++
 			return 0, false, i
 		}
 
+		c.TLBHits++
 		return ((entryLo & entryLoPFN) << 6) | entry.pageOffset(addr), true, i
 	}
+	c.TLBMisses++
 	return 0, false, -1
 }
 

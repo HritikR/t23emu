@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/HritikR/t23emu/internal/bus"
 	"github.com/HritikR/t23emu/internal/cpu"
@@ -159,6 +160,13 @@ type Machine struct {
 
 	ROM *device.ROM
 
+	// romData holds the original firmware image for re-loading on reboot.
+	romData []byte
+
+	// splBoot indicates the firmware is an Ingenic SPL image, which
+	// needs stack/return-address setup on every boot.
+	splBoot bool
+
 	// UART is UART0, retained as the conventional console handle.
 	UART *device.UART
 
@@ -174,7 +182,7 @@ type Machine struct {
 	INTC *device.INTC
 
 	// TCU is the watchdog, timer/counter and OS timer block.
-	TCU *device.RegisterBlock
+	TCU *device.TCU
 
 	// OST is the Linux OS timer clocksource and tick block.
 	OST *device.OST
@@ -220,6 +228,13 @@ type Machine struct {
 
 	// BootROMReturn is the address that signals a return to the boot ROM.
 	BootROMReturn uint32
+
+	// rtSyncEnabled controls the wall-clock governor in Run(). When
+	// true, the emulator sleeps whenever emulated time runs ahead of
+	// real time, keeping interactive timeouts (e.g. login prompts)
+	// accurate. During boot the emulator is slower than real time, so
+	// no sleep occurs.
+	rtSyncEnabled bool
 }
 
 // Option configures a Machine instance.
@@ -228,6 +243,7 @@ type Option func(*MachineOptions)
 type MachineOptions struct {
 	DisableSDCard bool
 	SDCardImage   []byte
+	DisableRTSync bool
 }
 
 // WithSDCardImage sets a custom SD card disk image.
@@ -241,6 +257,17 @@ func WithSDCardImage(image []byte) Option {
 func WithDisableSDCard() Option {
 	return func(o *MachineOptions) {
 		o.DisableSDCard = true
+	}
+}
+
+// WithDisableRTSync disables the wall-clock governor in Run(). By
+// default the emulator sleeps whenever emulated time runs ahead of real
+// time, keeping interactive timeouts (e.g. login prompts) accurate.
+// Disabling it gives maximum speed at the cost of those timeouts firing
+// too quickly.
+func WithDisableRTSync() Option {
+	return func(o *MachineOptions) {
+		o.DisableRTSync = true
 	}
 }
 
@@ -373,6 +400,17 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		}
 		traceSFCIRQf("dma-write addr=0x%08x len=%d data=% x", addr, len(data), data)
 	}
+	sfc.DMARead = func(addr uint32, length int) []byte {
+		data := make([]byte, length)
+		for i := 0; i < length; i++ {
+			source := addr + uint32(i)
+			if source >= ram.Size() {
+				break
+			}
+			data[i] = ram.Read8(source)
+		}
+		return data
+	}
 	sfc.Interrupt = func(assert bool) {
 		if assert {
 			intc.Assert(SFCIRQ)
@@ -496,6 +534,31 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		assertTimer()
 		return intc.RawPending() != 0
 	}
+	c.NextWakeCycle = func() uint64 {
+		ostNext := ost.NextExpiryCycle()
+		wdtNext := tcu.WatchdogExpiryCycle()
+		// Treat a stale OST expiry (already passed) as unarmed so
+		// the watchdog deadline is used instead. This happens during
+		// the reboot spin loop when the kernel has stopped acking OST
+		// interrupts and nextCompare is stuck in the past.
+		if ostNext != 0 && ostNext <= c.Cycles {
+			ostNext = 0
+		}
+		if wdtNext != 0 && (ostNext == 0 || wdtNext < ostNext) {
+			return wdtNext
+		}
+		return ostNext
+	}
+
+	// Watchdog: check expiry on every Step(). When the countdown
+	// reaches zero, halt for reboot.
+	tcu.OnWatchdogReset = func() {
+		c.HaltWith(cpu.HaltWatchdogReset,
+			"watchdog reset (system reboot)")
+	}
+	c.WatchdogCheck = func() bool {
+		return tcu.WatchdogExpired()
+	}
 
 	if len(romData) > 0 {
 		c.ResetPC = resetPC
@@ -516,6 +579,8 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		CPU:           c,
 		RAM:           ram,
 		ROM:           rom,
+		romData:       romData,
+		splBoot:       isIngenicSPL,
 		UART:          uart,
 		UARTs:         uarts,
 		CPM:           cpm,
@@ -539,6 +604,7 @@ func New(ramSize uint32, romData []byte, sfcSize uint32, opts ...Option) *Machin
 		Periph:        periph,
 		Bus:           b,
 		BootROMReturn: BootROMReturn,
+		rtSyncEnabled: !options.DisableRTSync,
 	}
 }
 
@@ -547,6 +613,35 @@ func (m *Machine) Reset() {
 
 	m.CPU.Reset()
 
+}
+
+// reboot resets the CPU and critical device state so the firmware
+// re-executes from the reset vector, simulating a hardware watchdog
+// reset.
+func (m *Machine) reboot() {
+	m.CPU.Reset()
+
+	// Re-do boot setup (stack pointer, return address for SPL).
+	if len(m.romData) > 0 && m.splBoot {
+		sp := 0x80000000 + SPLLoadAddress + uint32(len(m.romData)) + 0x4000
+		sp = sp &^ 7
+		m.CPU.WriteRegister(29, sp)
+		m.CPU.WriteRegister(31, BootROMReturn)
+	}
+
+	// Clear interrupt controller so stale IRQs don't fire during boot.
+	m.INTC.Reset()
+
+	// Reset OS timer so the kernel programs it from scratch.
+	m.OST.Reset()
+
+	// Clear watchdog state.
+	m.TCU.Reset()
+
+	// Clear SFC transfer state (flash contents persist).
+	m.SFC.Reset()
+
+	m.CPU.Running = true
 }
 
 // LoadProgram copies a program into RAM.
@@ -584,6 +679,25 @@ func (m *Machine) Run(maxCycles uint64) uint64 {
 
 	start := m.CPU.Cycles
 
+	// Wall-clock governor: when emulated time runs ahead of real
+	// time (e.g. during idle when the emulator can outpace real
+	// hardware), sleep so the guest sees correct timing for
+	// interactive features like login timeouts. During boot the
+	// emulator is slower than real time, so no sleep occurs.
+	//
+	// The check fires every syncInterval emulated cycles, which is
+	// coarse enough to avoid time.Now() overhead in the hot path
+	// but fine enough for smooth throttling (~once per OST tick).
+	const syncInterval uint64 = 10_000_000 // ~8.4ms at 1.188GHz
+	const cyclesPerSec = 1_188_000_000
+
+	var govStart time.Time
+	var nextSync uint64
+	if m.rtSyncEnabled {
+		govStart = time.Now()
+		nextSync = start + syncInterval
+	}
+
 	for m.CPU.Running {
 
 		if maxCycles > 0 && m.CPU.Cycles-start >= maxCycles {
@@ -600,6 +714,32 @@ func (m *Machine) Run(maxCycles uint64) uint64 {
 		}
 
 		m.CPU.Step()
+
+		// Governor: if emulated time is ahead of wall-clock time,
+		// sleep for the difference. This naturally handles idle
+		// loops, WAIT fast-forwards, and spin-forward jumps without
+		// needing firmware-specific address detection.
+		if m.rtSyncEnabled && m.CPU.Cycles >= nextSync {
+			nextSync = m.CPU.Cycles + syncInterval
+			emulated := time.Duration(float64(m.CPU.Cycles-start) /
+				float64(cyclesPerSec) * float64(time.Second))
+			if ahead := emulated - time.Since(govStart); ahead > 0 {
+				time.Sleep(ahead)
+			}
+		}
+
+		// If the watchdog triggered a reset, reboot and continue.
+		if !m.CPU.Running && m.CPU.HaltReason == cpu.HaltWatchdogReset {
+			m.reboot()
+			start = m.CPU.Cycles
+			maxCycles = 0 // reboot runs indefinitely
+			// Reset the governor baseline so post-reboot boot runs
+			// at full speed (emulator is slower than real time).
+			if m.rtSyncEnabled {
+				govStart = time.Now()
+				nextSync = start + syncInterval
+			}
+		}
 	}
 
 	m.CPU.Stop()
