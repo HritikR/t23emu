@@ -36,6 +36,7 @@ func main() {
 	gdbWait := flag.Bool("gdb-wait", false, "Pause CPU execution on start until GDB connects")
 	sdcardPath := flag.String("sdcard", "", "Path to optional SD card image file to mount")
 	noSDCard := flag.Bool("no-sdcard", false, "Disable SD card presence in MSC controller")
+	riTrace := flag.Bool("ri-trace", false, "Log Reserved Instruction exceptions to stderr")
 
 	cpuProfile := flag.String("cpuprofile", "", "Write cpu profile to file")
 
@@ -92,6 +93,11 @@ func main() {
 
 	m := machine.New(uint32(*ramSize), romData, uint32(*flashSize), machineOpts...)
 	m.CPU.RecordHistory = *history
+
+	if *riTrace {
+		m.CPU.EnableRITrace(os.Stdout)
+	}
+
 	if *haltPC != 0 {
 		m.CPU.Breakpoints = map[uint32]bool{uint32(*haltPC): true}
 	}

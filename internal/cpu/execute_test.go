@@ -1511,8 +1511,9 @@ func TestCOP1CvtWRoundModes(t *testing.T) {
 		{"trunc.w.d rz", FP_RZ, COP1_TRUNC_W, 2},
 		{"ceil.w.d rp", FP_RP, COP1_CEIL_W, 3},
 		{"floor.w.d rm", FP_RM, COP1_FLOOR_W, 2},
-		{"round.w.d rn", FP_RN, COP1_ROUND_W, 3}, // ties away from zero in our impl
-		{"cvt.w.d default rn", FP_RN, COP1_CVT_W, 3},
+		{"round.w.d rn", FP_RN, COP1_ROUND_W, 2}, // IEEE 754 / MIPS FP_RN: ties to even (2.5 -> 2)
+		{"cvt.w.d default rn", FP_RN, COP1_CVT_W, 2},
+
 		{"cvt.w.d rp", FP_RP, COP1_CVT_W, 3},
 		{"cvt.w.d rm", FP_RM, COP1_CVT_W, 2},
 	} {
@@ -1735,3 +1736,60 @@ func TestDelayLoopFastForwardZeroCount(t *testing.T) {
 		t.Fatalf("expected cycles=1, got %d", cpu.Cycles)
 	}
 }
+
+func TestCOP1XAndExtendedCOP1(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+	enableCU1(cpu)
+
+	// Test MFHC1 / MTHC1
+	cpu.WriteRegister(1, 0x12345678)
+	cpu.Execute(Instruction{
+		Opcode: OP_COP1, Rs: COP1_MTHC1, Rt: 1, Rd: 2,
+	})
+	cpu.Execute(Instruction{
+		Opcode: OP_COP1, Rs: COP1_MFHC1, Rt: 3, Rd: 2,
+	})
+	if cpu.ReadRegister(3) != 0x12345678 {
+		t.Fatalf("MFHC1/MTHC1 expected 0x12345678, got 0x%08X", cpu.ReadRegister(3))
+	}
+
+	// Test COP1X MADD.S: (2.0 * 3.0) + 4.0 = 10.0
+	cpu.writeFPR_S(0, 4.0) // fr
+	cpu.writeFPR_S(1, 3.0) // ft
+	cpu.writeFPR_S(2, 2.0) // fs
+	cpu.Execute(Instruction{
+		Opcode: OP_COP1X, Rs: 0, Rt: 1, Rd: 2, Shamt: 3, Funct: COP1X_MADD_S,
+	})
+	if got := cpu.readFPR_S(3); got != 10.0 {
+		t.Fatalf("MADD.S expected 10.0, got %g", got)
+	}
+
+	// Test COP1X SWXC1 / LWXC1
+	cpu.WriteRegister(4, 0x100) // base
+	cpu.WriteRegister(5, 0x10)  // index (addr = 0x110)
+	cpu.writeFPR_S(8, 42.5)     // fs
+	cpu.Execute(Instruction{
+		Opcode: OP_COP1X, Rs: 4, Rt: 5, Rd: 8, Funct: COP1X_SWXC1,
+	})
+	if bits := ram.Read32(0x110); math.Float32frombits(bits) != 42.5 {
+		t.Fatalf("SWXC1 memory expected 42.5, got bits 0x%08X", bits)
+	}
+	cpu.Execute(Instruction{
+		Opcode: OP_COP1X, Rs: 4, Rt: 5, Shamt: 9, Funct: COP1X_LWXC1,
+	})
+	if got := cpu.readFPR_S(9); got != 42.5 {
+		t.Fatalf("LWXC1 expected 42.5, got %g", got)
+	}
+
+	// Test FUNCT_MOVCI (MOVF / MOVT on GPR): raw 0x002d1001 is MOVT $2, $1, cc=3 (rs=1, rt=13, rd=2)
+	cpu.setFCC(3, true)
+	cpu.WriteRegister(2, 99)
+	cpu.WriteRegister(1, 77)
+	cpu.Execute(Decode(0x002d1001)) // MOVT $2, $1, cc=3
+	if cpu.ReadRegister(2) != 77 {
+		t.Fatalf("MOVT GPR expected 77, got %d", cpu.ReadRegister(2))
+	}
+
+}
+
+

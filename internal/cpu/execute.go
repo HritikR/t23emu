@@ -160,12 +160,20 @@ func (c *CPU) Execute(inst Instruction) {
 		}
 		c.executeCOP1(inst)
 
+	case OP_COP1X:
+		if !c.cop1Usable() {
+			c.coprocessorUnusable(1)
+			break
+		}
+		c.executeCOP1X(inst)
+
 	case OP_COP2:
 		c.coprocessorUnusable(inst.Opcode - OP_COP0)
 
 	default:
 		c.reservedInstruction(inst)
 	}
+
 }
 
 // executeRType handles opcode 0 instructions.
@@ -178,7 +186,11 @@ func (c *CPU) executeRType(inst Instruction) {
 	case FUNCT_SLL:
 		c.executeSLL(inst)
 
+	case FUNCT_MOVCI:
+		c.executeMOVCI(inst)
+
 	case FUNCT_SRL:
+
 		c.executeSRL(inst)
 
 	case FUNCT_SRA:
@@ -846,6 +858,17 @@ func (c *CPU) executeSLL(inst Instruction) {
 	c.WriteRegister(inst.Rd, c.ReadRegister(inst.Rt)<<inst.Shamt)
 	c.retire()
 }
+
+// MOVCI implements MOVF/MOVT on GPRs based on FCSR condition code.
+func (c *CPU) executeMOVCI(inst Instruction) {
+	tf := inst.Rt&1 == 1
+	cc := uint8(inst.Rt>>2) & 7
+	if c.readFCC(cc) == tf {
+		c.WriteRegister(inst.Rd, c.ReadRegister(inst.Rs))
+	}
+	c.retire()
+}
+
 
 func (c *CPU) executeSRL(inst Instruction) {
 	value := c.ReadRegister(inst.Rt)
@@ -1521,15 +1544,23 @@ func (c *CPU) executeCOP1(inst Instruction) {
 	case COP1_MFC1:
 		c.WriteRegister(inst.Rt, c.FPR[inst.Rd])
 		c.retire()
+	case COP1_MFHC1:
+		c.WriteRegister(inst.Rt, c.FPR[(inst.Rd&30)|1])
+		c.retire()
 	case COP1_MTC1:
 		c.FPR[inst.Rd] = c.ReadRegister(inst.Rt)
 		c.retire()
+	case COP1_MTHC1:
+		c.FPR[(inst.Rd&30)|1] = c.ReadRegister(inst.Rt)
+		c.retire()
+
 	case COP1_CFC1:
 		switch inst.Rd {
 	case 0:
-		// FIR: advertise FPU with S (14), D (15), and W (16) format
-		// support, no paired single, no fused multiply-add.
-		c.WriteRegister(inst.Rt, 0x0001C000)
+		// FIR: advertise FPU with S (14), D (15), W (16), L (17), and fused
+		// multiply-add MADD (19) format support, revision 1.
+		c.WriteRegister(inst.Rt, 0x0009C001)
+
 		case 25:
 			// FEXR: cause/flags lower half.
 			c.WriteRegister(inst.Rt, c.FCSR&(FCSR_CAUSE|FCSR_FLAGS))
@@ -1995,3 +2026,131 @@ func (c *CPU) executeCOP1Compare(inst Instruction) {
 func math32IsNaN(v float32) bool {
 	return v != v
 }
+
+// executeCOP1X handles Opcode 19 instructions (MIPS32r2 COP1X extended FPU operations).
+func (c *CPU) executeCOP1X(inst Instruction) {
+	switch inst.Funct {
+	case COP1X_LWXC1:
+		addr := c.ReadRegister(inst.Rs) + c.ReadRegister(inst.Rt)
+		if !c.checkLoad(addr, 4) {
+			return
+		}
+		c.writeFPR_S(inst.Shamt, math.Float32frombits(c.read32(addr)))
+		c.retire()
+	case COP1X_LDXC1:
+		addr := c.ReadRegister(inst.Rs) + c.ReadRegister(inst.Rt)
+		if !c.checkLoad(addr, 8) {
+			return
+		}
+		c.writeFPR_D(inst.Shamt, math.Float64frombits(uint64(c.read32(addr))|(uint64(c.read32(addr+4))<<32)))
+		c.retire()
+	case COP1X_LUXC1:
+		addr := c.ReadRegister(inst.Rs) + c.ReadRegister(inst.Rt)
+		if !c.checkLoad(addr&^3, 8) {
+			return
+		}
+		c.writeFPR_D(inst.Shamt, math.Float64frombits(uint64(c.read32(addr))|(uint64(c.read32(addr+4))<<32)))
+		c.retire()
+	case COP1X_SWXC1:
+		addr := c.ReadRegister(inst.Rs) + c.ReadRegister(inst.Rt)
+		if !c.checkStore(addr, 4) {
+			return
+		}
+		c.write32(addr, math.Float32bits(c.readFPR_S(inst.Rd)))
+		c.retire()
+	case COP1X_SDXC1:
+		addr := c.ReadRegister(inst.Rs) + c.ReadRegister(inst.Rt)
+		if !c.checkStore(addr, 8) {
+			return
+		}
+		bits := math.Float64bits(c.readFPR_D(inst.Rd))
+		c.write32(addr, uint32(bits))
+		c.write32(addr+4, uint32(bits>>32))
+		c.retire()
+	case COP1X_SUXC1:
+		addr := c.ReadRegister(inst.Rs) + c.ReadRegister(inst.Rt)
+		if !c.checkStore(addr&^3, 8) {
+			return
+		}
+		bits := math.Float64bits(c.readFPR_D(inst.Rd))
+		c.write32(addr, uint32(bits))
+		c.write32(addr+4, uint32(bits>>32))
+		c.retire()
+	case COP1X_PREFX:
+		c.retire()
+	case COP1X_MADD_S:
+		fr := inst.Rs
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+		c.writeFPR_S(fd, c.readFPR_S(fs)*c.readFPR_S(ft)+c.readFPR_S(fr))
+		c.retire()
+	case COP1X_MADD_D:
+		fr := inst.Rs
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+		c.writeFPR_D(fd, c.readFPR_D(fs)*c.readFPR_D(ft)+c.readFPR_D(fr))
+		c.retire()
+	case COP1X_MSUB_S:
+		fr := inst.Rs
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+		c.writeFPR_S(fd, c.readFPR_S(fs)*c.readFPR_S(ft)-c.readFPR_S(fr))
+		c.retire()
+	case COP1X_MSUB_D:
+		fr := inst.Rs
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+		c.writeFPR_D(fd, c.readFPR_D(fs)*c.readFPR_D(ft)-c.readFPR_D(fr))
+		c.retire()
+	case COP1X_NMADD_S:
+		fr := inst.Rs
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+		c.writeFPR_S(fd, -(c.readFPR_S(fs)*c.readFPR_S(ft) + c.readFPR_S(fr)))
+		c.retire()
+	case COP1X_NMADD_D:
+		fr := inst.Rs
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+		c.writeFPR_D(fd, -(c.readFPR_D(fs)*c.readFPR_D(ft) + c.readFPR_D(fr)))
+		c.retire()
+	case COP1X_NMSUB_S:
+		fr := inst.Rs
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+		c.writeFPR_S(fd, -(c.readFPR_S(fs)*c.readFPR_S(ft) - c.readFPR_S(fr)))
+		c.retire()
+	case COP1X_NMSUB_D:
+		fr := inst.Rs
+		ft := inst.Rt
+		fs := inst.Rd
+		fd := inst.Shamt
+		c.writeFPR_D(fd, -(c.readFPR_D(fs)*c.readFPR_D(ft) - c.readFPR_D(fr)))
+		c.retire()
+	case COP1X_MOVF, COP1X_MOVT:
+		tf := inst.Funct == COP1X_MOVT
+		cc := uint8(inst.Rd>>2) & 7
+		fd := inst.Shamt
+		fs := inst.Rs
+		fmt := inst.Rd & 3
+		if c.readFCC(cc) == tf {
+			switch fmt {
+			case 0:
+				c.writeFPR_S(fd, c.readFPR_S(fs))
+			case 1:
+				c.writeFPR_D(fd, c.readFPR_D(fs))
+			}
+		}
+		c.retire()
+	default:
+		c.reservedInstruction(inst)
+	}
+}
+
