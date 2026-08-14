@@ -18,6 +18,10 @@ const (
 	// HaltBootROMReturn means the firmware returned to the address the
 	// boot ROM would have supplied as its return address.
 	HaltBootROMReturn
+
+	// HaltWatchdogReset means the guest triggered a watchdog reset,
+	// i.e. a system reboot.
+	HaltWatchdogReset
 )
 
 func (h HaltReason) String() string {
@@ -34,6 +38,8 @@ func (h HaltReason) String() string {
 		return "unimplemented instruction"
 	case HaltBootROMReturn:
 		return "returned to boot ROM"
+	case HaltWatchdogReset:
+		return "watchdog reset"
 	}
 	return "unknown"
 }

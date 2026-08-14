@@ -6,11 +6,44 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/HritikR/t23emu/internal/bus"
 )
 
 const HistorySize = 512
+
+// spinForwardThreshold is the number of Steps without an interrupt
+// before the CPU fast-forwards through a spin loop (e.g. the kernel
+// reboot loop where interrupts are disabled). The OST tick fires every
+// ~12M cycles, so this threshold is well clear of normal operation.
+const spinForwardThreshold = 100000
+
+// pollLoopThreshold is the number of consecutive register-identical
+// iterations of the same backward branch before the loop is treated as
+// a poll/spin loop and skipped.
+const pollLoopThreshold = 32
+
+// pollTableSize is the number of backward branches tracked for
+// poll-loop detection. Direct-mapped by PC; collisions merely reduce
+// detection coverage.
+const pollTableSize = 256
+
+// pollSleepCycles is the emulated time advanced per poll-loop skip
+// while interrupts are disabled, matched to the 1ms wall sleep so
+// cycle-driven device state and timer-based timeouts keep progressing
+// at approximately real-time rate.
+const pollSleepCycles = 1_188_000
+
+// pollEntry tracks one candidate backward branch for poll-loop
+// detection.
+type pollEntry struct {
+	branch uint32
+	regs   [32]uint32
+	hi     uint32
+	lo     uint32
+	count  uint
+}
 
 type CPU struct {
 	// General purpose registers
@@ -111,6 +144,10 @@ type CPU struct {
 	// this to fast-forward Cycles to the next event instead of spinning.
 	NextWakeCycle func() uint64
 
+	// WatchdogCheck is called on every Step(). If it returns true, the
+	// machine halts for a watchdog reset (reboot).
+	WatchdogCheck func() bool
+
 	// LLBit is the load-linked bit set by LL and tested by SC.
 	LLBit bool
 
@@ -144,6 +181,12 @@ type CPU struct {
 	// trace can be redirected independently of emulated UART output.
 	TraceOut io.Writer
 
+	// pcSamples, when enabled, records a sampled histogram of executed
+	// PCs (bucketed to 256-byte regions). One sample is taken every
+	// 64K instructions, which is enough to identify hot loops while
+	// costing effectively nothing in the Steady-state hot path.
+	pcSamples map[uint32]uint64
+
 	// exceptionRun counts exceptions taken without an intervening
 	// successful instruction retire, used to detect a fault storm.
 	exceptionRun int
@@ -162,6 +205,33 @@ type CPU struct {
 	currentMemAddr   uint32
 	currentMemVal    uint32
 	currentMemAccess string
+
+	// stepsSinceInterrupt counts Steps taken without delivering an
+	// interrupt. During normal operation the OST fires every ~12M
+	// cycles, so this rarely exceeds a few thousand. During a reboot
+	// spin loop (interrupts disabled), it climbs indefinitely. When it
+	// passes spinForwardThreshold and the watchdog is armed, we
+	// fast-forward to the watchdog deadline so the reboot fires
+	// quickly.
+	stepsSinceInterrupt int
+
+	// Poll-loop detection: the kernel's idle loop busy-polls instead
+	// of executing WAIT, and U-Boot polls the UART with interrupts
+	// disabled, so the WAIT fast-forward alone leaves the emulator
+	// executing every poll iteration at full host CPU cost. The table
+	// tracks recent backward branches; when one executes repeatedly
+	// with identical GPR/HI/LO state, its loop body is idempotent and
+	// can only be waiting on external state (an interrupt handler, a
+	// device, or DMA), so it is safe to skip ahead. Loops that make
+	// progress (counters, pointers, accumulators) change registers
+	// every iteration and are never skipped.
+	//
+	// On skip with IE=1, Cycles fast-forwards to the next wake event
+	// so the pending interrupt fires immediately; the wall-clock
+	// governor in Machine.Run keeps the jump aligned with real time.
+	// With IE=0 no interrupt can ever fire, so the emulator sleeps
+	// briefly and advances Cycles to match wall-clock passage instead.
+	pollTable [pollTableSize]pollEntry
 
 	// Debugger breakpoints, watchpoints, and single stepping
 	Breakpoints   map[uint32]bool
@@ -307,10 +377,22 @@ func (c *CPU) Step() {
 		return
 	}
 
+	// Sampled PC histogram for the halt-time hot-region report.
+	if c.pcSamples != nil && c.Cycles&0xFFFF == 0 {
+		c.pcSamples[c.PC>>8]++
+	}
+
+	// Watchdog check — must run even when WAITing so a watchdog timeout
+	// can break out of a reboot spin loop.
+	if c.WatchdogCheck != nil && c.WatchdogCheck() {
+		return
+	}
+
 	if c.Waiting {
 		if pending := c.updateInterruptPending(); pending != 0 {
 			c.Waiting = false
 			if c.interruptEnabled(pending) {
+				c.stepsSinceInterrupt = 0
 				c.takeInterrupt()
 			}
 			c.Cycles++
@@ -326,8 +408,30 @@ func (c *CPU) Step() {
 	}
 
 	if !c.branchTaken && c.checkInterrupts() {
+		c.stepsSinceInterrupt = 0
 		c.Cycles++
 		return
+	}
+
+	// Spin-loop fast-forward: if interrupts have been disabled (IE=0)
+	// for a long time, the CPU is likely in the kernel reboot spin
+	// loop. Jump directly to the next wake cycle (watchdog deadline)
+	// instead of emulating billions of printk cycles.
+	//
+	// Only counting Steps while IE=0 ensures the counter starts fresh
+	// the moment interrupts are disabled, so brief critical sections
+	// during normal operation never reach the threshold.
+	if c.CP0[CP0_STATUS]&STATUS_IE == 0 {
+		c.stepsSinceInterrupt++
+		if c.stepsSinceInterrupt >= spinForwardThreshold &&
+			c.NextWakeCycle != nil {
+			if next := c.NextWakeCycle(); next > c.Cycles {
+				c.Cycles = next
+			}
+			c.stepsSinceInterrupt = 0
+		}
+	} else {
+		c.stepsSinceInterrupt = 0
 	}
 
 	// The instruction about to run is a delay slot if the previous one
@@ -396,6 +500,49 @@ func (c *CPU) Step() {
 	}
 
 	c.Execute(inst)
+
+	// Poll-loop fast-forward: a taken backward branch closes one loop
+	// iteration. If the GPR/HI/LO state is identical to the previous
+	// iteration of the same branch, the body is idempotent and can only
+	// be spinning on external state (an interrupt handler, a device, or
+	// DMA) — skip ahead instead of emulating the poll at full host CPU
+	// cost. Each branch is tracked independently, so loops containing
+	// function calls or nested loops (whose own backward branches reset
+	// only their own entries) are still detected. Loops that make
+	// progress (counters, pointers, accumulators) change registers
+	// every iteration and are never skipped.
+	if c.branchTaken && c.NextPC <= pc {
+		e := &c.pollTable[(pc>>2)&(pollTableSize-1)]
+		if e.branch != pc || e.regs != c.Regs ||
+			e.hi != c.HI || e.lo != c.LO {
+			e.branch = pc
+			e.regs = c.Regs
+			e.hi = c.HI
+			e.lo = c.LO
+			e.count = 1
+		} else {
+			e.count++
+			if e.count >= pollLoopThreshold {
+				e.count = 0
+				if c.CP0[CP0_STATUS]&STATUS_IE != 0 {
+					if c.NextWakeCycle != nil {
+						if next := c.NextWakeCycle(); next > c.Cycles {
+							c.Cycles = next
+						}
+					}
+				} else {
+					// Interrupts are disabled, so no interrupt can
+					// break the loop (e.g. U-Boot polling the UART at
+					// a prompt). Sleep and advance emulated time to
+					// match wall-clock passage; the register snapshot
+					// proved the loop does not observe the timer
+					// itself, so the jump is unobservable to it.
+					time.Sleep(time.Millisecond)
+					c.Cycles += pollSleepCycles
+				}
+			}
+		}
+	}
 
 	if c.RecordHistory {
 		c.RecordHistoryEntry(pc, raw, inDelaySlot)
@@ -522,6 +669,36 @@ func (c *CPU) EnableRITrace(w io.Writer) {
 	} else {
 		c.riCounters = nil
 	}
+}
+
+// PCSample is one entry of the sampled PC histogram.
+type PCSample struct {
+	Region uint32 // 256-byte aligned base address
+	Count  uint64
+}
+
+// EnablePCSampling starts recording a sampled histogram of executed
+// PCs, bucketed to 256-byte regions. One sample is taken every 64K
+// instructions, so the overhead is negligible while hot loops still
+// accumulate thousands of samples.
+func (c *CPU) EnablePCSampling() {
+	c.pcSamples = make(map[uint32]uint64)
+}
+
+// PCSamples returns the histogram sorted by sample count, descending.
+// Returns nil when sampling was never enabled.
+func (c *CPU) PCSamples() []PCSample {
+	if c.pcSamples == nil {
+		return nil
+	}
+	samples := make([]PCSample, 0, len(c.pcSamples))
+	for region, count := range c.pcSamples {
+		samples = append(samples, PCSample{Region: region << 8, Count: count})
+	}
+	sort.Slice(samples, func(i, j int) bool {
+		return samples[i].Count > samples[j].Count
+	})
+	return samples
 }
 
 // reservedInstruction raises a Reserved Instruction exception and, when
