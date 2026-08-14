@@ -34,6 +34,7 @@ func main() {
 	history := flag.Bool("history", false, "Save and print history of the last 40 executed instructions on halt")
 	haltPC := flag.Uint("halt-pc", 0, "Halt before executing the specified guest PC address; use 0 to disable")
 	watchInterval := flag.Uint("watch", 0, "Print PC, Status, Cause, and the last 40 instructions to stderr every N seconds while running (0=off). Useful for diagnosing hangs without needing to interrupt.")
+	pcHist := flag.Bool("pc-hist", false, "Sample executed PCs (every 64K instructions) and report the hottest regions on halt")
 	gdbAddr := flag.String("gdb", "", "Enable GDB RSP server on port or address (e.g. :1234)")
 	gdbWait := flag.Bool("gdb-wait", false, "Pause CPU execution on start until GDB connects")
 	sdcardPath := flag.String("sdcard", "", "Path to optional SD card image file to mount")
@@ -116,6 +117,9 @@ func main() {
 	}
 
 	m.CPU.TraceADE = *traceADE
+	if *pcHist {
+		m.CPU.EnablePCSampling()
+	}
 
 	var gdbServer *debug.Server
 	if *gdbAddr != "" {
@@ -358,6 +362,23 @@ func main() {
 		}
 		fmt.Printf("  [%2d] VPN2=0x%08X ASID=0x%02X PFN0=0x%05X PFN1=0x%05X%s\n",
 			i, vpn2, asid, pfn0, pfn1, flags)
+	}
+
+	if samples := m.CPU.PCSamples(); len(samples) > 0 {
+		fmt.Println("\n--- PC Histogram (top 20, sampled every 64K instructions) ---")
+		var total uint64
+		for _, s := range samples {
+			total += s.Count
+		}
+		fmt.Printf("  total samples: %d\n", total)
+		fmt.Printf("  %-10s %-8s %s\n", "Region", "Samples", "Share")
+		for i, s := range samples {
+			if i >= 20 {
+				break
+			}
+			fmt.Printf("  0x%08X  %-8d %.1f%%\n",
+				s.Region, s.Count, float64(s.Count)*100/float64(total))
+		}
 	}
 
 	if *history {

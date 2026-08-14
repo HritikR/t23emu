@@ -181,6 +181,12 @@ type CPU struct {
 	// trace can be redirected independently of emulated UART output.
 	TraceOut io.Writer
 
+	// pcSamples, when enabled, records a sampled histogram of executed
+	// PCs (bucketed to 256-byte regions). One sample is taken every
+	// 64K instructions, which is enough to identify hot loops while
+	// costing effectively nothing in the Steady-state hot path.
+	pcSamples map[uint32]uint64
+
 	// exceptionRun counts exceptions taken without an intervening
 	// successful instruction retire, used to detect a fault storm.
 	exceptionRun int
@@ -369,6 +375,11 @@ func (c *CPU) Step() {
 
 	if !c.Running {
 		return
+	}
+
+	// Sampled PC histogram for the halt-time hot-region report.
+	if c.pcSamples != nil && c.Cycles&0xFFFF == 0 {
+		c.pcSamples[c.PC>>8]++
 	}
 
 	// Watchdog check — must run even when WAITing so a watchdog timeout
@@ -658,6 +669,36 @@ func (c *CPU) EnableRITrace(w io.Writer) {
 	} else {
 		c.riCounters = nil
 	}
+}
+
+// PCSample is one entry of the sampled PC histogram.
+type PCSample struct {
+	Region uint32 // 256-byte aligned base address
+	Count  uint64
+}
+
+// EnablePCSampling starts recording a sampled histogram of executed
+// PCs, bucketed to 256-byte regions. One sample is taken every 64K
+// instructions, so the overhead is negligible while hot loops still
+// accumulate thousands of samples.
+func (c *CPU) EnablePCSampling() {
+	c.pcSamples = make(map[uint32]uint64)
+}
+
+// PCSamples returns the histogram sorted by sample count, descending.
+// Returns nil when sampling was never enabled.
+func (c *CPU) PCSamples() []PCSample {
+	if c.pcSamples == nil {
+		return nil
+	}
+	samples := make([]PCSample, 0, len(c.pcSamples))
+	for region, count := range c.pcSamples {
+		samples = append(samples, PCSample{Region: region << 8, Count: count})
+	}
+	sort.Slice(samples, func(i, j int) bool {
+		return samples[i].Count > samples[j].Count
+	})
+	return samples
 }
 
 // reservedInstruction raises a Reserved Instruction exception and, when
