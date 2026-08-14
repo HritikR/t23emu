@@ -27,9 +27,11 @@ const (
 	OP_LUI   uint8 = 15
 
 	// Coprocessors
-	OP_COP0 uint8 = 16
-	OP_COP1 uint8 = 17
-	OP_COP2 uint8 = 18
+	OP_COP0  uint8 = 16
+	OP_COP1  uint8 = 17
+	OP_COP2  uint8 = 18
+	OP_COP1X uint8 = 19
+
 
 	// Branch likely variants (nullify the delay slot when not taken)
 	OP_BEQL  uint8 = 20
@@ -231,10 +233,12 @@ const (
 
 // COP1 register transfer sub-operations, held in the Rs field.
 const (
-	COP1_MFC1 uint8 = 0
-	COP1_CFC1 uint8 = 2
-	COP1_MTC1 uint8 = 4
-	COP1_CTC1 uint8 = 6
+	COP1_MFC1  uint8 = 0
+	COP1_MFHC1 uint8 = 1
+	COP1_CFC1  uint8 = 2
+	COP1_MTC1  uint8 = 4
+	COP1_MTHC1 uint8 = 5
+	COP1_CTC1  uint8 = 6
 )
 
 // COP1 format codes (rs field of a fmt-formatted COP1 instruction).
@@ -264,10 +268,35 @@ const (
 	COP1_MOVCF   uint8 = 17 // movcf.fmt (move on FP condition)
 	COP1_MOVZ    uint8 = 18 // movz.fmt
 	COP1_MOVN    uint8 = 19 // movn.fmt
+	COP1_RECIP   uint8 = 21 // recip.fmt
+	COP1_RSQRT   uint8 = 22 // rsqrt.fmt
 	COP1_CVT_S   uint8 = 32 // cvt.s.fmt
 	COP1_CVT_D   uint8 = 33 // cvt.d.fmt
 	COP1_CVT_W   uint8 = 36 // cvt.w.fmt (uses FCSR.RM)
 )
+
+// COP1X function codes (held in funct field of Opcode 19 instructions).
+const (
+	COP1X_LWXC1   uint8 = 0  // lwxc1 fd, index(base)
+	COP1X_LDXC1   uint8 = 1  // ldxc1 fd, index(base)
+	COP1X_LUXC1   uint8 = 5  // luxc1 fd, index(base)
+	COP1X_SWXC1   uint8 = 8  // swxc1 fs, index(base)
+	COP1X_SDXC1   uint8 = 9  // sdxc1 fs, index(base)
+	COP1X_SUXC1   uint8 = 13 // suxc1 fs, index(base)
+	COP1X_PREFX   uint8 = 15 // prefx hint, index(base)
+	COP1X_MOVF    uint8 = 17 // movf.fmt / movt.fmt
+	COP1X_MOVT    uint8 = 18
+	COP1X_ALNV_PS uint8 = 30
+	COP1X_MADD_S  uint8 = 32 // madd.s fd, fr, fs, ft
+	COP1X_MADD_D  uint8 = 33 // madd.d fd, fr, fs, ft
+	COP1X_MSUB_S  uint8 = 40 // msub.s fd, fr, fs, ft
+	COP1X_MSUB_D  uint8 = 41 // msub.d fd, fr, fs, ft
+	COP1X_NMADD_S uint8 = 48 // nmadd.s fd, fr, fs, ft
+	COP1X_NMADD_D uint8 = 49 // nmadd.d fd, fr, fs, ft
+	COP1X_NMSUB_S uint8 = 56 // nmsub.s fd, fr, fs, ft
+	COP1X_NMSUB_D uint8 = 57 // nmsub.d fd, fr, fs, ft
+)
+
 
 // COP1 compare condition codes (funct field). C.cond.fmt encodes a
 // 16-entry predicate table combining less/equal/unordered results.

@@ -151,6 +151,10 @@ func Disassemble(raw uint32, pc uint32) string {
 	case OP_COP1:
 		return disasmCOP1(inst, pc)
 
+	case OP_COP1X:
+		return disasmCOP1X(inst)
+
+
 	case OP_SPECIAL2:
 		return disasmSpecial2(inst)
 
@@ -194,6 +198,18 @@ func disasmSpecial(inst Instruction) string {
 
 	case FUNCT_SLL:
 		return fmt.Sprintf("sll     %s, %s, %d", reg(inst.Rd), reg(inst.Rt), inst.Shamt)
+	case FUNCT_MOVCI:
+		tf := inst.Rt & 1
+		cc := (inst.Rt >> 2) & 7
+		mnemonic := "movf"
+		if tf == 1 {
+			mnemonic = "movt"
+		}
+		if cc == 0 {
+			return fmt.Sprintf("%-7s %s, %s", mnemonic, reg(inst.Rd), reg(inst.Rs))
+		}
+		return fmt.Sprintf("%-7s %s, %s, %d", mnemonic, reg(inst.Rd), reg(inst.Rs), cc)
+
 	case FUNCT_SRL:
 		return fmt.Sprintf("srl     %s, %s, %d", reg(inst.Rd), reg(inst.Rt), inst.Shamt)
 	case FUNCT_SRA:
@@ -482,3 +498,26 @@ func disasmCOP1(inst Instruction, pc uint32) string {
 	}
 	return fmt.Sprintf(".word   0x%08x", inst.Raw)
 }
+
+func disasmCOP1X(inst Instruction) string {
+	switch inst.Funct {
+	case COP1X_LWXC1:
+		return fmt.Sprintf("lwxc1   %s, %s(%s)", fpr(inst.Shamt), reg(inst.Rt), reg(inst.Rs))
+	case COP1X_LDXC1:
+		return fmt.Sprintf("ldxc1   %s, %s(%s)", fpr(inst.Shamt), reg(inst.Rt), reg(inst.Rs))
+	case COP1X_SWXC1:
+		return fmt.Sprintf("swxc1   %s, %s(%s)", fpr(inst.Rd), reg(inst.Rt), reg(inst.Rs))
+	case COP1X_SDXC1:
+		return fmt.Sprintf("sdxc1   %s, %s(%s)", fpr(inst.Rd), reg(inst.Rt), reg(inst.Rs))
+	case COP1X_MADD_S:
+		return fmt.Sprintf("madd.s  %s, %s, %s, %s", fpr(inst.Shamt), fpr(inst.Rs), fpr(inst.Rd), fpr(inst.Rt))
+	case COP1X_MADD_D:
+		return fmt.Sprintf("madd.d  %s, %s, %s, %s", fpr(inst.Shamt), fpr(inst.Rs), fpr(inst.Rd), fpr(inst.Rt))
+	case COP1X_MSUB_S:
+		return fmt.Sprintf("msub.s  %s, %s, %s, %s", fpr(inst.Shamt), fpr(inst.Rs), fpr(inst.Rd), fpr(inst.Rt))
+	case COP1X_MSUB_D:
+		return fmt.Sprintf("msub.d  %s, %s, %s, %s", fpr(inst.Shamt), fpr(inst.Rs), fpr(inst.Rd), fpr(inst.Rt))
+	}
+	return fmt.Sprintf("cop1x   funct=0x%02x raw=0x%08x", inst.Funct, inst.Raw)
+}
+
