@@ -229,4 +229,13 @@ func (o *OST) OST1Expired() bool {
 	return o.expired()
 }
 
+// NextWakeCycle returns the CPU cycle count at which the next OST1 tick will expire.
+func (o *OST) NextWakeCycle() uint64 {
+	if o.period == 0 {
+		return 0
+	}
+	targetTick := o.nextCompare
+	return o.origin + targetTick*OSTCyclesPerTick
+}
+
 var _ Device = (*OST)(nil)
