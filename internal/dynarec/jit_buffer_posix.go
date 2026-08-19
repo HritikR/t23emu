@@ -1,14 +1,11 @@
-package cpu
+//go:build darwin || linux || freebsd || netbsd || openbsd
+
+package dynarec
 
 import (
 	"fmt"
 	"syscall"
 )
-
-// JITBuffer manages executable RWX memory pages.
-type JITBuffer struct {
-	data []byte
-}
 
 // NewJITBuffer allocates an executable memory page using mmap.
 func NewJITBuffer(size int) (*JITBuffer, error) {
@@ -16,7 +13,6 @@ func NewJITBuffer(size int) (*JITBuffer, error) {
 		size = 4096
 	}
 
-	// Align to page size
 	pageSize := syscall.Getpagesize()
 	size = (size + pageSize - 1) & ^(pageSize - 1)
 
@@ -31,13 +27,7 @@ func NewJITBuffer(size int) (*JITBuffer, error) {
 	return &JITBuffer{data: data}, nil
 }
 
-// Bytes returns the raw executable memory slice.
-func (b *JITBuffer) Bytes() []byte {
-	return b.data
-}
-
-// Free releases the allocated memory.
-func (b *JITBuffer) Free() error {
+func (b *JITBuffer) freeOS() error {
 	if b.data != nil {
 		err := syscall.Munmap(b.data)
 		b.data = nil

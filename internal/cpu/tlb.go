@@ -110,6 +110,9 @@ func (c *CPU) writeIndexedTLB(index int) {
 		EntryLo0: c.CP0[CP0_ENTRYLO0],
 		EntryLo1: c.CP0[CP0_ENTRYLO1],
 	}
+	if c.Dynarec != nil {
+		c.Dynarec.Invalidate()
+	}
 }
 
 func (c *CPU) readIndexedTLB(index int) {
