@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/HritikR/t23emu/internal/bus"
+	"github.com/HritikR/t23emu/internal/dynarec"
 )
 
 const HistorySize = 512
 
 type CPU struct {
+	Dynarec *dynarec.Engine
 	// General purpose registers
 	// MIPS has 32 registers: $zero-$ra
 	Regs [32]uint32
@@ -209,6 +211,7 @@ func New(b *bus.Bus) *CPU {
 		Bus:             b,
 		TraceOut:        os.Stderr,
 		MaxExceptionRun: 16,
+		Dynarec:         dynarec.NewEngine(),
 	}
 
 	cpu.Reset()
@@ -219,6 +222,9 @@ func New(b *bus.Bus) *CPU {
 
 // Reset places CPU into initial state
 func (c *CPU) Reset() {
+	if c.Dynarec != nil {
+		c.Dynarec.Invalidate()
+	}
 
 	// Clear general purpose registers
 	for i := range c.Regs {
@@ -464,13 +470,41 @@ func (c *CPU) cp0TimerPending() bool {
 
 // Run executes the CPU loop.
 func (c *CPU) Run() {
-
 	c.Running = true
 
 	for c.Running {
+		if c.Dynarec != nil && c.Dynarec.StepBlock(c) {
+			continue
+		}
 		c.Step()
 	}
 }
+
+// dynarec.CPUContext implementation methods:
+func (c *CPU) GetPC() uint32                    { return c.PC }
+func (c *CPU) SetPC(pc uint32)                  { c.PC = pc }
+func (c *CPU) GetNextPC() uint32                { return c.NextPC }
+func (c *CPU) SetNextPC(pc uint32)              { c.NextPC = pc }
+func (c *CPU) SetCurrentPC(pc uint32)           { c.CurrentPC = pc }
+func (c *CPU) SetInstruction(raw uint32)        { c.Instruction = raw }
+func (c *CPU) IsSingleStep() bool               { return c.SingleStep }
+func (c *CPU) IsInDelaySlot() bool              { return c.InDelaySlot }
+func (c *CPU) IsBranchTaken() bool              { return c.branchTaken }
+func (c *CPU) SetBranchTaken(taken bool)        { c.branchTaken = taken }
+func (c *CPU) SetInDelaySlot(inDelay bool)      { c.InDelaySlot = inDelay }
+func (c *CPU) CheckInterrupts() bool            { return c.checkInterrupts() }
+func (c *CPU) IncCycles(count uint64)           { c.Cycles += count }
+func (c *CPU) HasMapping(addr uint32) bool      { return c.Bus.HasMapping(addr) }
+func (c *CPU) Read32(addr uint32) uint32        { return c.read32(addr) }
+func (c *CPU) Read8(addr uint32) byte           { return c.read8(addr) }
+func (c *CPU) Write32(addr uint32, val uint32)  { c.write32(addr, val) }
+func (c *CPU) Write8(addr uint32, val byte)     { c.write8(addr, val) }
+func (c *CPU) ReadReg(reg uint8) uint32         { return c.ReadRegister(reg) }
+func (c *CPU) WriteReg(reg uint8, val uint32)   { c.WriteRegister(reg, val) }
+func (c *CPU) ExecuteRaw(raw uint32) bool       { c.Execute(Decode(raw)); return true }
+func (c *CPU) RaiseException(exc, addr uint32) { c.Exception(uint8(exc), addr) }
+func (c *CPU) IsRunning() bool                  { return c.Running }
+func (c *CPU) Retire()                          { c.retire() }
 
 // Stop stops CPU execution.
 func (c *CPU) Stop() {
