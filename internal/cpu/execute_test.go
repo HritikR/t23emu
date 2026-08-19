@@ -829,7 +829,7 @@ func TestCOP1RegisterTransfers(t *testing.T) {
 	cpu.WriteRegister(10, 0x00020001)
 	cpu.Execute(Instruction{Opcode: OP_COP1, Rs: COP1_CTC1, Rt: 10, Rd: 31})
 	// Cause.E (bit 17) is read-only zero in hardware; CTC1 keeps the rest.
-	if got := cpu.FCSR&0x0000FFFF; got != 0x00000001 {
+	if got := cpu.FCSR & 0x0000FFFF; got != 0x00000001 {
 		t.Fatalf("expected CTC1 to write FCSR (Cause.E masked), got 0x%08X", cpu.FCSR)
 	}
 
@@ -1503,10 +1503,10 @@ func TestCOP1CvtWRoundModes(t *testing.T) {
 
 	cpu.writeFPR_D(0, 2.5)
 	for _, tc := range []struct {
-		name string
-		rm   uint32
+		name  string
+		rm    uint32
 		funct uint8
-		want int32
+		want  int32
 	}{
 		{"trunc.w.d rz", FP_RZ, COP1_TRUNC_W, 2},
 		{"ceil.w.d rp", FP_RP, COP1_CEIL_W, 3},
@@ -1737,6 +1737,32 @@ func TestDelayLoopFastForwardZeroCount(t *testing.T) {
 	}
 }
 
+func TestDelayLoopFastForwardDoesNotCrossTimerWake(t *testing.T) {
+	cpu, ram := createCPUWithRAM()
+
+	ram.Write32(0, 0x1480FFFF) // bne $a0, $zero, -1
+	ram.Write32(4, 0x2484FFFF) // addiu $a0, $a0, -1
+
+	cpu.Regs[4] = 1000
+	cpu.PC = 0x80000000
+	cpu.NextPC = 0x80000004
+	cpu.Running = true
+	cpu.CP0[CP0_STATUS] = STATUS_IE | CAUSE_IP2
+	cpu.NextWakeCycle = func() uint64 { return 100 }
+
+	cpu.Step()
+
+	if cpu.Regs[4] != 1000 {
+		t.Fatalf("expected $a0 unchanged without fast-forward, got 0x%08X", cpu.Regs[4])
+	}
+	if cpu.Cycles != 1 {
+		t.Fatalf("expected only the BNE cycle to retire, got %d", cpu.Cycles)
+	}
+	if cpu.PC != 0x80000004 || cpu.NextPC != 0x80000000 {
+		t.Fatalf("expected normal taken branch pipeline, PC=0x%08X NextPC=0x%08X", cpu.PC, cpu.NextPC)
+	}
+}
+
 func TestCOP1XAndExtendedCOP1(t *testing.T) {
 	cpu, ram := createCPUWithRAM()
 	enableCU1(cpu)
@@ -1791,5 +1817,3 @@ func TestCOP1XAndExtendedCOP1(t *testing.T) {
 	}
 
 }
-
-

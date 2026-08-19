@@ -869,7 +869,6 @@ func (c *CPU) executeMOVCI(inst Instruction) {
 	c.retire()
 }
 
-
 func (c *CPU) executeSRL(inst Instruction) {
 	value := c.ReadRegister(inst.Rt)
 	if inst.Rs == 1 {
@@ -1062,7 +1061,11 @@ func (c *CPU) tryFastDelayLoop(inst Instruction) bool {
 	remaining := uint64(uint32(-int32(v1)))
 
 	// Each iteration is 5 instructions (load, addiu, store, beq, nop).
-	c.Cycles += remaining * 5
+	cycles := remaining * 5
+	if c.delayFastForwardCrossesWake(cycles) {
+		return false
+	}
+	c.Cycles += cycles
 
 	// Exit the loop.
 	c.WriteRegister(3, 0)
@@ -1116,11 +1119,30 @@ func (c *CPU) tryFastDelayBNE(inst Instruction) bool {
 	// Each iteration: BNE + ADDIU delay slot = 2 cycles.
 	// The current BNE and its delay slot will execute normally (the exit
 	// iteration), so we only advance for the skipped iterations.
-	c.Cycles += uint64(regVal) * 2
+	cycles := uint64(regVal) * 2
+	if c.delayFastForwardCrossesWake(cycles) {
+		return false
+	}
+	c.Cycles += cycles
 
 	c.WriteRegister(regIdx, 0)
 
 	return true
+}
+
+func (c *CPU) delayFastForwardCrossesWake(cycles uint64) bool {
+	if cycles == 0 || c.NextWakeCycle == nil {
+		return false
+	}
+	status := c.CP0[CP0_STATUS]
+	if status&STATUS_IE == 0 || status&(STATUS_EXL|STATUS_ERL) != 0 || status&STATUS_IM == 0 {
+		return false
+	}
+	nextWake := c.NextWakeCycle()
+	if nextWake == 0 || nextWake <= c.Cycles {
+		return false
+	}
+	return nextWake < c.Cycles+cycles
 }
 
 func (c *CPU) executeBNE(inst Instruction) {
@@ -1556,10 +1578,10 @@ func (c *CPU) executeCOP1(inst Instruction) {
 
 	case COP1_CFC1:
 		switch inst.Rd {
-	case 0:
-		// FIR: advertise FPU with S (14), D (15), W (16), L (17), and fused
-		// multiply-add MADD (19) format support, revision 1.
-		c.WriteRegister(inst.Rt, 0x0009C001)
+		case 0:
+			// FIR: advertise FPU with S (14), D (15), W (16), L (17), and fused
+			// multiply-add MADD (19) format support, revision 1.
+			c.WriteRegister(inst.Rt, 0x0009C001)
 
 		case 25:
 			// FEXR: cause/flags lower half.
@@ -2153,4 +2175,3 @@ func (c *CPU) executeCOP1X(inst Instruction) {
 		c.reservedInstruction(inst)
 	}
 }
-
