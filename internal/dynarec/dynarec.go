@@ -67,28 +67,31 @@ func (e *Engine) Invalidate() {
 func (e *Engine) Lookup(c CPUContext, pc uint32) *BasicBlock {
 	index := (pc >> 2) & 0xFFFF
 
-	e.mu.RLock()
+	// Fast path: direct lock-free check in the lookup table
 	block := e.lookup[index]
 	if block != nil && block.StartPC == pc {
-		e.mu.RUnlock()
 		return block
 	}
-	block = e.cache[pc]
-	e.mu.RUnlock()
 
+	// Slow path: acquire lock to search secondary cache or compile new block
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Double-check lookup table under lock
+	block = e.lookup[index]
+	if block != nil && block.StartPC == pc {
+		return block
+	}
+
+	block = e.cache[pc]
 	if block != nil {
-		e.mu.Lock()
 		e.lookup[index] = block
-		e.mu.Unlock()
 		return block
 	}
 
 	block = e.compileThreadedBlock(c, pc)
-
-	e.mu.Lock()
 	e.cache[pc] = block
 	e.lookup[index] = block
-	e.mu.Unlock()
 
 	return block
 }
