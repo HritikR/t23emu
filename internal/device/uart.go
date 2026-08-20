@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"sync"
-	"time"
 )
 
 // Ingenic UART register offsets. The part uses a 16550-compatible layout
@@ -248,16 +247,8 @@ func (u *UART) Write8(addr uint32, value byte) {
 			u.buf = append(u.buf, value)
 			emit = true
 
-			u.threPending = false
+			u.threPending = true
 			u.updateInterrupts()
-
-			go func() {
-				time.Sleep(100 * time.Microsecond)
-				u.mu.Lock()
-				defer u.mu.Unlock()
-				u.threPending = true
-				u.updateInterrupts()
-			}()
 		}
 
 	case UART_IER:

@@ -53,3 +53,55 @@ func TestUARTStatusRegister(t *testing.T) {
 		t.Fatalf("expected 32-bit status 0x60, got 0x%08X", status32)
 	}
 }
+
+func TestUARTInterrupts(t *testing.T) {
+	uart := NewUART(nil)
+	var irqAsserted bool
+	uart.Interrupt = func(assert bool) {
+		irqAsserted = assert
+	}
+
+	// Initially IER is 0, so no interrupt
+	if irqAsserted {
+		t.Fatalf("expected irq to not be asserted initially")
+	}
+
+	// Enable THRE interrupt (IER bit 1)
+	uart.Write8(UART_IER, 0x02)
+	if !irqAsserted {
+		t.Fatalf("expected THRE interrupt to be asserted when enabled")
+	}
+
+	// Writing a byte to TX should keep THRE updated synchronously without goroutines
+	uart.Write8(UART_RBR, 'A')
+	if !irqAsserted {
+		t.Fatalf("expected THRE interrupt to remain asserted")
+	}
+
+	// Disable THRE interrupt
+	uart.Write8(UART_IER, 0x00)
+	if irqAsserted {
+		t.Fatalf("expected interrupt to clear when disabled in IER")
+	}
+
+	// Enable RDA interrupt (IER bit 0)
+	uart.Write8(UART_IER, 0x01)
+	if irqAsserted {
+		t.Fatalf("expected no RDA interrupt when RX queue is empty")
+	}
+
+	// Feed RX data
+	uart.Feed([]byte{'X'})
+	if !irqAsserted {
+		t.Fatalf("expected RDA interrupt when RX data available")
+	}
+
+	// Read byte from RX
+	b := uart.Read8(UART_RBR)
+	if b != 'X' {
+		t.Fatalf("expected read byte 'X', got %c", b)
+	}
+	if irqAsserted {
+		t.Fatalf("expected RDA interrupt to deassert once RX buffer is consumed")
+	}
+}
